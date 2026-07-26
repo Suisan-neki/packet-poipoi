@@ -1,62 +1,65 @@
 # Packet Journey
 
-同じUDP負荷を **Application / nftables / XDP** の3か所で止め、Raspberry Piの受信処理がどう変わるかを比べる実験です。
+大量の不要な通信を、コンピュータの入口で止めるのと、アプリまで運んでから捨てるのでは、仕事量はどれくらい変わるのか。
+
+Packet Journeyは、この問いを2台のRaspberry Piと実際の通信で確かめる実験です。
 
 [Webデモを見る](https://suisan-neki.github.io/packet-journey/)
 
 > Webデモの数値は、画面の流れを確認するためのサンプルです。実測結果ではありません。
 
+## なぜ測るのか
+
+コンピュータには、残したいサービスの通信だけが届くとは限りません。不要な通信もアプリまで運べば、その途中にあるOSやアプリの処理が動きます。入口で止めれば後段の処理は発生しませんが、実際にどの程度の差が出るかは実機で確かめる必要があります。
+
+Packet Journeyは防御製品ではありません。普段は見えない「どの段階で通信を止めるか」という設計の違いを、手元の小さなコンピュータで測り、目で追えるようにする実験装置です。
+
 ## 何を比べるのか
 
-Pi AからPi Bへ、同じ条件のUDPパケットを送ります。変えるのは、Pi Bがパケットを止める位置だけです。
+一方のPiから、もう一方のPiへ同じ量の実験用通信を送ります。変えるのは、受け取ったPiが通信を止める位置だけです。
 
 ```text
 Raspberry Pi A                         Raspberry Pi B
 
-UDP :4000 ─────────> NIC ──> XDP ──> network stack ──> nftables ──> UDP socket
-                      │       │                              │             │
-                   LANの入口   └─ XDP条件                     │             └─ Application条件
-                                                         └─ nftables条件
+実験用の通信 ───────> LANの入口 ─> 入口の判定 ─> OSの受信処理 ─> 途中の判定 ─> アプリ
+                       NIC          XDP       network stack    nftables    Application
 ```
 
-- **NIC**: 有線LANからパケットを受け取る装置
-- **XDP**: Linuxの通常のネットワーク処理へ渡す前に動くeBPF hook
-- **nftables**: Linux内のfirewall
-- **Application**: UDP socketからパケットを読むuserspace process
+通信を最後まで運べば、入口からアプリまでの処理がすべて動きます。途中や入口で止めれば、その先の処理は発生しません。実際にどの程度の差が出るかを、PiのCPUとLinuxの受信処理から測ります。
 
 比較する3条件は次のとおりです。
 
-| 条件 | パケットを止める場所 | その手前の動作 |
+| 何をするか | 技術上の条件名 | 通信が通る範囲 |
 | --- | --- | --- |
-| Application | UDP socketまで到達した後 | XDPは通過、nftablesも通過 |
-| nftables | Linux network stack内 | XDPは通過 |
-| XDP | NIC driver付近 | 後段のnetwork stackへ渡さない |
+| アプリまで運んでから捨てる | Application | 入口からUDP socketまで |
+| OSの途中で止める | nftables | Linux network stackまで |
+| LANの入口で止める | XDP | NIC driver付近まで |
 
 標準設定は2,000 pps、128 byte、15秒です。各条件を3回ずつ実行し、開始順も入れ替えます。
 
-確かめたいのは、**同じパケットでも、止める位置によってPi Bの処理量に差が出るか**です。XDPが必ず最良だとは決めず、実機の値で比較します。
+実験用の通信にはUDPを使います。接続や再送の影響を受けにくく、同じrateで送り続けやすいためです。XDPが必ず最良だとは決めず、実機の値で比較します。
 
 ## 何を測るのか
 
 | 指標 | 見ているもの |
 | --- | --- |
-| CPU busy | 計測中にPi BのCPUが動いていた割合 |
-| NET_RX softirq | Linuxが行ったネットワーク受信処理の回数 |
-| Application receive | UDP socketまで到達したパケットの割合 |
-| XDP attach mode | 実際に使われた`native` / `generic` |
+| Piの仕事量（CPU busy） | 計測中にCPUが動いていた割合 |
+| OSの受信処理（NET_RX softirq） | Linuxが行ったネットワーク受信処理の回数 |
+| アプリ到達率 | UDP socketまで届いた通信の割合 |
+| XDPの動作条件 | 実際に使われた`native` / `generic` mode |
 
 代表値は3回の中央値です。ばらつきを隠さないよう、最小値と最大値も残します。Piの型、kernel、interface、MTU、CPU governorもrunごとに記録します。
 
-HTTP GETは比較対象ではありません。UDP負荷をかけている間もPi B上のサービスが応答しているかを見るcanaryです。
+横では、Pi B上のWebサービスが応答しているかも確認します。これは「守りたいサービス」の生存確認で、3条件を比較する指標ではありません。技術的にはHTTP GETをcanaryとして使っています。
 
 ## デモの流れ
 
 Dashboardは、1画面に全情報を詰め込まず、実験を順番に追います。
 
-1. Applicationまで届ける
-2. nftablesで止める
-3. XDPで止める
-4. 3条件のCPU / NET_RX / 到達率を比べる
+1. アプリまで運ぶ（Application）
+2. OSの途中で止める（nftables）
+3. LANの入口で止める（XDP）
+4. Piの仕事量と、OS・アプリまで届いた処理を比べる
 
 GitHub Pages版はサンプルデータを再生します。Tauri版は、各条件3回分の`experiment_run`がそろった時だけ比較結果を表示します。
 
