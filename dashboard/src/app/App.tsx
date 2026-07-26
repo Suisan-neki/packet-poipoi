@@ -100,23 +100,23 @@ const CONDITION_COPY: Record<
 > = {
   application: {
     eyebrow: "条件1 / 最後まで運ぶ",
-    title: "不要な通信を、アプリまで運んでから捨てる。",
+    title: "止めると決めた通信を、アプリまで運んでから捨てる。",
     description:
-      "Piは入口からアプリまでの全経路を処理します。これを、途中で止めた条件と比べるための基準にします。技術上の条件名はApplicationです。",
+      "この条件では、アプリが受け取ってから捨てます。入口からアプリまでの全経路が動くため、早く止めた条件と比べる基準になります。技術上の条件名はApplicationです。",
     focus: "色のついた経路が、右端のアプリまで続いている",
   },
   netfilter: {
     eyebrow: "条件2 / 途中で止める",
     title: "同じ通信を、アプリへ届く前に止める。",
     description:
-      "送る量は変えません。Linuxの途中にあるfirewallで捨て、アプリの処理を省きます。この仕組みがnftablesです。",
+      "送る量は変えません。Linuxの途中にあるfirewallで捨て、アプリまで運んで受け取る仕事を発生させません。この仕組みがnftablesです。",
     focus: "経路が途中の判定で止まり、アプリまで届かない",
   },
   xdp: {
     eyebrow: "条件3 / 入口で止める",
     title: "同じ通信を、受け取った直後に止める。",
     description:
-      "有線LANから受け取った直後に判定し、Linuxの通常の受信処理へ渡しません。この入口の仕組みがXDPです。",
+      "有線LANから受け取った直後に捨て、Linuxの通常の受信処理やアプリまで運ぶ仕事を発生させません。この入口の仕組みがXDPです。",
     focus: "入口の判定だけで経路が終わっている",
   },
 };
@@ -350,13 +350,13 @@ function PredictionIntro({
       <section className="prediction-panel" aria-labelledby="prediction-title">
         <span>BEFORE THE DEMO / 知識は必要ありません</span>
         <h2 id="prediction-title">
-          大量の不要な通信を、
+          同じ通信を、
           <strong>どこで止めるとPiの仕事は最も減る？</strong>
         </h2>
         <p>
-          Piは手のひらサイズのコンピュータです。同じ量の通信を流し、
-          止める場所だけを変えて、どこまで余計な処理を省けるか測ります。
-          まず予想してみてください。
+          通信を捨てること自体が目的ではありません。止めると決めた通信を
+          アプリまで運ばず、その先の仕事を発生させないことで、
+          本来のサービスへ余力を残せるかを確かめます。まず予想してみてください。
         </p>
         <div className="prediction-choices">
           {choices.map((choice, index) => (
@@ -454,11 +454,11 @@ function CompareStage({
       <section className="compare-heading">
         <div>
           <span>RESULT / 同じ通信、違う停止位置</span>
-          <h2>早く止めると、Piはどれだけ仕事を減らせたか。</h2>
+          <h2>止める位置で、Piに残せた余力はどう変わったか。</h2>
         </div>
         <p>
-          送る量・大きさ・時間をそろえて3回ずつ測定。
-          大きな数字だけでなく、OS内部の受信処理とアプリへの到達も確認します。
+          CPUとOSの受信処理が小さいほど、通信を止めるために使った仕事が少なく、
+          本来のサービスへ残せる余地の目安になります。
         </p>
       </section>
 
@@ -468,7 +468,7 @@ function CompareStage({
           <span role="columnheader">Piの仕事量 / CPU</span>
           <span role="columnheader">OSの受信処理 / NET_RX</span>
           <span role="columnheader">アプリまで到達</span>
-          <span role="columnheader">省けた処理</span>
+          <span role="columnheader">発生しなかった処理</span>
         </div>
         {summaries.map((summary, index) => (
           <div
@@ -497,10 +497,10 @@ function CompareStage({
             </span>
             <span role="cell">
               {summary.dropPoint === "application"
-                ? "なし。全経路を処理"
+                ? "なし。全経路が動く"
                 : summary.dropPoint === "netfilter"
-                  ? "アプリの処理"
-                  : "OS内部の後段処理"}
+                  ? "アプリまで運ぶ処理"
+                  : "通常のOS受信処理とアプリ"}
             </span>
           </div>
         ))}
@@ -718,8 +718,8 @@ export default function App() {
           <div>
             <span>この実験で確かめること</span>
             <h1>
-              不要な通信を、入口で止めるか。
-              <strong>アプリまで運ぶか。</strong>
+              止めると決めた通信を早く止め、
+              <strong>本来のサービスへ余力を残せるか。</strong>
             </h1>
           </div>
           <div className="fixed-condition">
@@ -732,11 +732,11 @@ export default function App() {
 
         <section className="canary-strip">
           <div>
-            <span>守りたいサービス</span>
+            <span>本来のサービス</span>
             <strong>負荷中も応答できるか</strong>
           </div>
           <p>
-            不要な通信を流している間も、同じPiのWebサービスを定期確認
+            実験用の通信を流している間も、同じPiのWebサービスを定期確認
           </p>
           <div className={health.success ? "canary-ok" : "canary-ng"}>
             <span>{health.success ? "応答あり" : "応答なし"}</span>
