@@ -429,7 +429,7 @@ function JourneyMap({
           <strong>{defending ? "XDP_DROP" : "XDP_PASS"}</strong>
           <em>
             {defending
-              ? `${formatCount(harbor.dropped)} packets`
+              ? `累計 ${formatCount(harbor.dropped)} packets`
               : "この段階ではまだ通す"}
           </em>
         </div>
@@ -809,7 +809,7 @@ export default function App() {
             <div className={phase === 2 ? "is-current" : ""}>
               <small>3 / XDPで判定</small>
               <strong>{phase >= 2 ? "XDP_DROP" : "MONITOR"}</strong>
-              <span>{phase >= 2 ? `${formatCount(harbor.dropped)} packets` : "まだ遮断しない"}</span>
+              <span>{phase >= 2 ? `累計 ${formatCount(harbor.dropped)} packets` : "まだ遮断しない"}</span>
             </div>
             <b>→</b>
             <div className={`${phase === 3 ? "is-current" : ""} ${serviceMaintained ? "is-success" : ""}`}>
