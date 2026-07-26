@@ -64,25 +64,25 @@ interface HealthState {
 
 const PHASES = [
   {
-    label: "アプリで捨てる",
-    short: "基準",
+    label: "アプリまで運ぶ",
+    short: "Application",
     code: "APPLICATION",
     dropPoint: "application",
   },
   {
-    label: "nftablesで捨てる",
-    short: "カーネル",
+    label: "途中で止める",
+    short: "nftables",
     code: "NETFILTER",
     dropPoint: "netfilter",
   },
   {
-    label: "XDPで捨てる",
-    short: "入口",
+    label: "入口で止める",
+    short: "XDP",
     code: "XDP",
     dropPoint: "xdp",
   },
   {
-    label: "3条件を比べる",
+    label: "仕事量を比べる",
     short: "結果",
     code: "COMPARE",
     dropPoint: null,
@@ -99,25 +99,25 @@ const CONDITION_COPY: Record<
   }
 > = {
   application: {
-    eyebrow: "基準 / 全経路を通す",
-    title: "まず、パケットをアプリまで届けて捨てる。",
+    eyebrow: "条件1 / 最後まで運ぶ",
+    title: "止めると決めた通信を、アプリまで運んでから捨てる。",
     description:
-      "NIC、XDP、network stackを通り、UDP socketで受信します。これを「全部処理した」基準にします。",
-    focus: "右の経路が、最後までつながっているところ",
+      "この条件では、アプリが受け取ってから捨てます。入口からアプリまでの全経路が動くため、早く止めた条件と比べる基準になります。技術上の条件名はApplicationです。",
+    focus: "色のついた経路が、右端のアプリまで続いている",
   },
   netfilter: {
-    eyebrow: "比較1 / network stack内",
-    title: "次に、同じ負荷をnftablesで止める。",
+    eyebrow: "条件2 / 途中で止める",
+    title: "同じ通信を、アプリへ届く前に止める。",
     description:
-      "送信条件は変えません。パケットはnetwork stackへ入りますが、UDP socketへ届く前に破棄されます。",
-    focus: "network stackの中にある停止位置",
+      "送る量は変えません。Linuxの途中にあるfirewallで捨て、アプリまで運んで受け取る仕事を発生させません。この仕組みがnftablesです。",
+    focus: "経路が途中の判定で止まり、アプリまで届かない",
   },
   xdp: {
-    eyebrow: "比較2 / driver entry",
-    title: "最後に、同じ負荷をXDPで入口から止める。",
+    eyebrow: "条件3 / 入口で止める",
+    title: "同じ通信を、受け取った直後に止める。",
     description:
-      "同じUDPだけを、network stackへ入る前に破棄します。実際のattach modeも結果へ残します。",
-    focus: "NIC直後で経路が終わるところ",
+      "有線LANから受け取った直後に捨て、Linuxの通常の受信処理やアプリまで運ぶ仕事を発生させません。この入口の仕組みがXDPです。",
+    focus: "入口の判定だけで経路が終わっている",
   },
 };
 
@@ -159,11 +159,11 @@ const DEFAULT_HEALTH: HealthState = {
 };
 
 const LAYERS = [
-  { id: "nic", label: "NIC", sub: "受信" },
-  { id: "xdp", label: "XDP", sub: "driver entry" },
-  { id: "stack", label: "network stack", sub: "Linux kernel" },
-  { id: "netfilter", label: "nftables", sub: "filter hook" },
-  { id: "application", label: "UDP socket", sub: "userspace" },
+  { id: "nic", label: "LANの入口", sub: "NIC" },
+  { id: "xdp", label: "入口の判定", sub: "XDP" },
+  { id: "stack", label: "通信の処理", sub: "Linux network stack" },
+  { id: "netfilter", label: "途中の判定", sub: "nftables" },
+  { id: "application", label: "アプリ", sub: "UDP socket" },
 ] as const;
 
 function clampPhase(value: number): ExperimentPhase {
@@ -204,16 +204,16 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
         dropPoint,
         label:
           dropPoint === "application"
+            ? "アプリまで運ぶ"
+            : dropPoint === "netfilter"
+              ? "途中で止める"
+              : "入口で止める",
+        location:
+          dropPoint === "application"
             ? "Application"
             : dropPoint === "netfilter"
               ? "nftables"
               : "XDP",
-        location:
-          dropPoint === "application"
-            ? "userspace"
-            : dropPoint === "netfilter"
-              ? "network stack"
-              : "driver entry",
         cpuPercent: median(cpuValues),
         cpuRange: minMax(cpuValues),
         softirqPer10k: median(softirqValues),
@@ -243,9 +243,9 @@ function formatRange(
 }
 
 function predictionLabel(dropPoint: DropPoint | null) {
-  if (dropPoint === "application") return "Application";
-  if (dropPoint === "netfilter") return "nftables";
-  if (dropPoint === "xdp") return "XDP";
+  if (dropPoint === "application") return "アプリまで運ぶ";
+  if (dropPoint === "netfilter") return "途中で止める";
+  if (dropPoint === "xdp") return "入口で止める";
   return "未回答";
 }
 
@@ -271,8 +271,8 @@ function LayerPath({ dropPoint }: { dropPoint: DropPoint }) {
     <div className={`layer-path layer-path--${dropPoint}`}>
       <div className="packet-source">
         <span>同じ入力</span>
-        <strong>UDP :4000</strong>
-        <em>2,000 pps · 128 B</em>
+        <strong>実験用の通信</strong>
+        <em>UDP :4000 · 2,000回/秒</em>
       </div>
       <div className="layer-sequence" aria-label="Linuxの受信経路">
         {LAYERS.map((layer, index) => {
@@ -294,7 +294,7 @@ function LayerPath({ dropPoint }: { dropPoint: DropPoint }) {
                 <strong>{layer.label}</strong>
                 {stopped && (
                   <span>
-                    {dropPoint === "application" ? "RECEIVE" : "DROP"}
+                    {dropPoint === "application" ? "ここで受信" : "ここで破棄"}
                   </span>
                 )}
               </div>
@@ -306,10 +306,10 @@ function LayerPath({ dropPoint }: { dropPoint: DropPoint }) {
         <span>この条件で変えるのは</span>
         <strong>
           {dropPoint === "application"
-            ? "アプリまで処理させる"
+            ? "アプリまで運んでから捨てる"
             : dropPoint === "netfilter"
-              ? "カーネル内で止める"
-              : "入口で止める"}
+              ? "途中のfirewallで止める"
+              : "入口のXDPで止める"}
         </strong>
       </div>
     </div>
@@ -330,32 +330,33 @@ function PredictionIntro({
   }> = [
     {
       dropPoint: "application",
-      label: "Application",
-      location: "全部通してから捨てる",
+      label: "アプリまで運ぶ",
+      location: "Application",
     },
     {
       dropPoint: "netfilter",
-      label: "nftables",
-      location: "カーネルの途中で捨てる",
+      label: "途中で止める",
+      location: "nftables",
     },
     {
       dropPoint: "xdp",
-      label: "XDP",
-      location: "NIC直後で捨てる",
+      label: "入口で止める",
+      location: "XDP",
     },
   ];
 
   return (
     <div className="prediction-backdrop">
       <section className="prediction-panel" aria-labelledby="prediction-title">
-        <span>BEFORE THE DEMO / まず予想する</span>
+        <span>BEFORE THE DEMO / 知識は必要ありません</span>
         <h2 id="prediction-title">
-          同じpacketなら、
-          <strong>どこで捨てるとPiの仕事が最も減る？</strong>
+          同じ通信を、
+          <strong>どこで止めるとPiの仕事は最も減る？</strong>
         </h2>
         <p>
-          変えるのは停止位置だけです。予想を1つ選ぶと、
-          同じ負荷を3つの経路で順に測ります。
+          通信を捨てること自体が目的ではありません。止めると決めた通信を
+          アプリまで運ばず、その先の仕事を発生させないことで、
+          本来のサービスへ余力を残せるかを確かめます。まず予想してみてください。
         </p>
         <div className="prediction-choices">
           {choices.map((choice, index) => (
@@ -367,7 +368,7 @@ function PredictionIntro({
               <b>0{index + 1}</b>
               <span>
                 <strong>{choice.label}</strong>
-                <small>{choice.location}</small>
+                <small>技術名: {choice.location}</small>
               </span>
             </button>
           ))}
@@ -404,22 +405,22 @@ function ConditionStage({
         <LayerPath dropPoint={dropPoint} />
         <div className="condition-metrics">
           <div>
-            <small>CPU busy · 中央値</small>
+            <small>Piの仕事量 · CPU busy</small>
             <strong>{formatNumber(summary.cpuPercent, 1)}%</strong>
             <em>{formatRange(summary.cpuRange, 1, "%")}</em>
           </div>
           <div>
-            <small>NET_RX / 1万packet</small>
+            <small>OSの受信処理 · NET_RX / 1万回</small>
             <strong>{formatNumber(summary.softirqPer10k)}</strong>
             <em>{formatRange(summary.softirqRange, 0)}</em>
           </div>
           <div>
-            <small>アプリへ到達 · 中央値</small>
+            <small>アプリまで届いた割合</small>
             <strong>{formatNumber(summary.appReceivePercent, 1)}%</strong>
             <em>{formatRange(summary.appReceiveRange, 1, "%")}</em>
           </div>
           <div>
-            <small>{dropPoint === "xdp" ? "実attach mode" : "反復"}</small>
+            <small>{dropPoint === "xdp" ? "XDPの動作mode" : "計測回数"}</small>
             <strong>
               {dropPoint === "xdp"
                 ? summary.attachMode
@@ -447,26 +448,27 @@ function CompareStage({
     (hasCompletedRun
       ? summaries.find(summary => summary.cpuPercent === bestCpu)?.dropPoint
       : null) ?? null;
+  const measuredBestLabel = predictionLabel(measuredBest);
   return (
     <div className="compare-stage">
       <section className="compare-heading">
         <div>
-          <span>RESULT / 同じ入力、違う停止位置</span>
-          <h2>「何を捨てたか」ではなく、「どこで捨てたか」を比べる。</h2>
+          <span>RESULT / 同じ通信、違う停止位置</span>
+          <h2>止める位置で、Piに残せた余力はどう変わったか。</h2>
         </div>
         <p>
-          送信レート・payload・時間を固定し、3回ずつ測定。
-          CPUとNET_RX softirqは中央値、app到達率は実受信数から算出します。
+          CPUとOSの受信処理が小さいほど、通信を止めるために使った仕事が少なく、
+          本来のサービスへ残せる余地の目安になります。
         </p>
       </section>
 
       <div className="comparison-table" role="table" aria-label="停止位置ごとの実測比較">
         <div className="comparison-row comparison-row--head" role="row">
-          <span role="columnheader">捨てる位置</span>
-          <span role="columnheader">CPU busy</span>
-          <span role="columnheader">NET_RX / 1万packet</span>
-          <span role="columnheader">アプリ到達</span>
-          <span role="columnheader">意味</span>
+          <span role="columnheader">止めた場所</span>
+          <span role="columnheader">Piの仕事量 / CPU</span>
+          <span role="columnheader">OSの受信処理 / NET_RX</span>
+          <span role="columnheader">アプリまで到達</span>
+          <span role="columnheader">発生しなかった処理</span>
         </div>
         {summaries.map((summary, index) => (
           <div
@@ -495,10 +497,10 @@ function CompareStage({
             </span>
             <span role="cell">
               {summary.dropPoint === "application"
-                ? "全経路を処理する基準"
+                ? "なし。全経路が動く"
                 : summary.dropPoint === "netfilter"
-                  ? "アプリの仕事を省く"
-                  : "stackの仕事から省く"}
+                  ? "アプリまで運ぶ処理"
+                  : "通常のOS受信処理とアプリ"}
             </span>
           </div>
         ))}
@@ -513,8 +515,9 @@ function CompareStage({
           {predictionLabel(measuredBest)}
         </span>
         <strong>
-          早く捨てるほど、後段へ渡す仕事を減らせる。
-          XDPの価値をDROP数ではなく処理差で示す。
+          {hasCompletedRun
+            ? `この表示では「${measuredBestLabel}」のCPU使用が最小でした。`
+            : "3条件の計測がそろうと、ここに結果を表示します。"}
         </strong>
       </div>
     </div>
@@ -644,12 +647,6 @@ export default function App() {
   }, [autoplay, demo, phase, showDetails, showPrediction]);
 
   useEffect(() => {
-    if (!demo || !showPrediction || !autoplay) return;
-    const timer = window.setTimeout(() => setShowPrediction(false), 12_000);
-    return () => window.clearTimeout(timer);
-  }, [autoplay, demo, showPrediction]);
-
-  useEffect(() => {
     if (showDetails) {
       closeButtonRef.current?.focus();
     } else {
@@ -700,18 +697,18 @@ export default function App() {
         </div>
         <div className="header-status">
           <span className={demo ? "fixture-badge" : "live-badge"}>
-            {demo ? "UI FIXTURE" : "LIVE"}
+            {demo ? "SAMPLE DATA" : "LIVE"}
           </span>
           <div>
-            <small>EXPERIMENT</small>
+            <small>計測ID</small>
             <strong>{representative?.experiment_id ?? "WAITING"}</strong>
           </div>
           <div>
-            <small>STREAM</small>
-            <strong>{streamStatus.toUpperCase()}</strong>
+            <small>データ</small>
+            <strong>{demo ? "SAMPLE" : streamStatus.toUpperCase()}</strong>
           </div>
           <button ref={detailsButtonRef} type="button" onClick={openDetails}>
-            計測方法 <kbd>D</kbd>
+            技術詳細 <kbd>D</kbd>
           </button>
         </div>
       </header>
@@ -719,32 +716,33 @@ export default function App() {
       <main className="booth-screen">
         <section className="experiment-question">
           <div>
-            <span>QUESTION</span>
+            <span>この実験で確かめること</span>
             <h1>
-              同じUDP負荷を、3つの場所で捨てる。
-              <strong>Piの仕事はどれだけ変わる？</strong>
+              止めると決めた通信を早く止め、
+              <strong>本来のサービスへ余力を残せるか。</strong>
             </h1>
           </div>
           <div className="fixed-condition">
-            <small>3条件で固定</small>
-            <strong>2,000 pps</strong>
-            <strong>128 B</strong>
-            <strong>15 sec × 3</strong>
+            <small>全条件で同じ</small>
+            <strong>2,000回/秒</strong>
+            <strong>128 byte</strong>
+            <strong>15秒 × 3回</strong>
           </div>
         </section>
 
         <section className="canary-strip">
           <div>
-            <span>HTTP CANARY</span>
-            <strong>比較対象ではありません</strong>
+            <span>本来のサービス</span>
+            <strong>負荷中も応答できるか</strong>
           </div>
           <p>
-            UDPで負荷を加えている間も、同じPi BのHTTPサービスが応答するか横で確認
+            実験用の通信を流している間も、同じPiのWebサービスを定期確認
           </p>
           <div className={health.success ? "canary-ok" : "canary-ng"}>
-            <span>{health.success ? "SERVICE UP" : "NO RESPONSE"}</span>
+            <span>{health.success ? "応答あり" : "応答なし"}</span>
             <strong>
-              {health.statusCode ?? "—"} <i>/</i> {health.latencyMs || "—"} ms
+              {health.latencyMs || "—"} ms{" "}
+              <i>HTTP {health.statusCode ?? "—"}</i>
             </strong>
           </div>
         </section>
@@ -764,8 +762,8 @@ export default function App() {
               >
                 <b>{index + 1}</b>
                 <span>
-                  <small>{item.short}</small>
                   <strong>{item.label}</strong>
+                  <small>{item.short}</small>
                 </span>
                 {demo && index === phase && autoplay && !showDetails && (
                   <i className="phase-progress" key={`progress-${phase}`} />
@@ -798,7 +796,7 @@ export default function App() {
             <strong>{PHASES[phase].label}</strong>
           </div>
           {demo && (
-            <p>公開版の数値はUI確認用fixtureです。実機版では計測結果だけを表示します。</p>
+            <p>公開版は画面確認用のサンプルデータです。実機版では計測結果だけを表示します。</p>
           )}
           <nav aria-label="画面の操作">
             <button

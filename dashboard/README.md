@@ -1,13 +1,13 @@
 # Packet Journey dashboard
 
-同じUDP負荷をApplication / nftables / XDPで止めた実験を、4画面で追う展示UIです。
+同じ量の実験用通信を「アプリまで運ぶ・OSの途中で止める・LANの入口で止める」の3条件で比べる展示UIです。Application / nftables / XDPは、それぞれの技術上の条件名として併記します。
 
 ## 画面
 
-1. Applicationまで届ける基準
-2. nftablesで止める条件
-3. XDPで止める条件
-4. CPU / NET_RX softirq / userspace到達率の比較
+1. アプリまで運ぶ（Application）
+2. OSの途中で止める（nftables）
+3. LANの入口で止める（XDP）
+4. Piの仕事量、OSの受信処理、アプリ到達率を比較
 
 HTTPは比較対象ではなく、負荷中もPi Bのserviceが応答するかを見るcanaryとして常に上部へ固定しています。
 
@@ -21,7 +21,7 @@ npm run preview:pages
 
 公開URL: https://suisan-neki.github.io/packet-journey/
 
-Web buildはUI fixtureを再生します。badgeとfooterでfixtureであることを明示し、数値を実測として扱いません。
+Web buildは画面確認用のサンプルデータを再生します。badgeとfooterでサンプルであることを明示し、数値を実測として扱いません。
 
 ## Tauri / live
 
@@ -29,7 +29,7 @@ Web buildはUI fixtureを再生します。badgeとfooterでfixtureであるこ�
 npm run tauri dev
 ```
 
-Tauri版は`127.0.0.1:9010`のNDJSON streamを購読します。`experiment_run`が3条件分そろうと比較画面へ進みます。
+Tauri版は`127.0.0.1:9010`のNDJSON streamを購読します。各条件3回分の`experiment_run`がそろうと比較画面へ進みます。
 
 ## Port
 

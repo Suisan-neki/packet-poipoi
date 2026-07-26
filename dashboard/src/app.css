@@ -300,6 +300,8 @@ kbd {
 .canary-strip > div:last-child i {
   color: #7c898a;
   font-style: normal;
+  font-size: 0.5rem;
+  font-weight: 500;
 }
 
 .canary-ok {
@@ -384,7 +386,7 @@ kbd {
 }
 
 .phase-strip button small {
-  margin-bottom: 2px;
+  margin-top: 3px;
   font-size: 0.53rem;
   letter-spacing: 0.08em;
 }
@@ -392,6 +394,10 @@ kbd {
 .phase-strip button strong {
   font-size: 0.66rem;
   white-space: nowrap;
+}
+
+.phase-strip li.is-active button small {
+  color: #b9c5c5;
 }
 
 .phase-progress {
