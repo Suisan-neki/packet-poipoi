@@ -3,17 +3,6 @@
 version = 4
 
 [[package]]
-name = "action-node"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "rppal",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -122,6 +111,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "experiment-runner"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "observation-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -160,16 +160,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys",
-]
-
-[[package]]
-name = "mock-sensor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -324,6 +314,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "traffic-node"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

@@ -1,8 +1,6 @@
 use anyhow::Context as _;
 use clap::Parser;
-use observation_core::{
-    parse_upstream_line, CorrelationEngine, CorrelationOutput, StreamEvent, UpstreamEvent,
-};
+use observation_core::parse_upstream_line;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -14,13 +12,13 @@ struct Opt {
     /// xdp-hello の NDJSON 配信先（上流 TCP サーバ）。
     #[arg(long, default_value = "127.0.0.1:9000")]
     ebpf_source: String,
-    /// action-node / mock-sensor 等のイベント受信アドレス。
+    /// traffic-node / experiment-runnerのイベント受信アドレス。
     #[arg(long, default_value = "127.0.0.1:9001")]
-    sensor_listen: String,
+    event_listen: String,
     /// ダッシュボード向け統合ストリーム。
     #[arg(short, long, default_value = "127.0.0.1:9010")]
     listen: String,
-    /// action-node が叩く HTTP エンドポイント（GET /api/ping）。
+    /// traffic-nodeが継続監視するHTTPエンドポイント（GET /api/ping）。
     #[arg(long, default_value = "127.0.0.1:8080")]
     http_listen: String,
 }
@@ -29,16 +27,15 @@ struct Opt {
 async fn main() -> anyhow::Result<()> {
     let opt = Opt::parse();
     let (tx, _) = broadcast::channel::<String>(4096);
-    let engine = std::sync::Arc::new(tokio::sync::Mutex::new(CorrelationEngine::default()));
 
     spawn_dashboard_server(opt.listen.clone(), tx.clone()).await?;
-    spawn_sensor_server(opt.sensor_listen.clone(), tx.clone(), engine.clone()).await?;
+    spawn_event_ingest_server(opt.event_listen.clone(), tx.clone()).await?;
     spawn_http_server(opt.http_listen.clone()).await?;
-    spawn_ebpf_client(opt.ebpf_source.clone(), tx.clone(), engine);
+    spawn_ebpf_client(opt.ebpf_source.clone(), tx.clone());
 
     println!("observation-hub:");
     println!("  dashboard stream: {}", opt.listen);
-    println!("  action ingest:    {}", opt.sensor_listen);
+    println!("  event ingest:     {}", opt.event_listen);
     println!("  http ping:        http://{}/api/ping", opt.http_listen);
     println!("  ebpf upstream:    {}", opt.ebpf_source);
 
@@ -89,10 +86,9 @@ async fn spawn_dashboard_server(
     Ok(())
 }
 
-async fn spawn_sensor_server(
+async fn spawn_event_ingest_server(
     listen: String,
     tx: broadcast::Sender<String>,
-    engine: std::sync::Arc<tokio::sync::Mutex<CorrelationEngine>>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(&listen)
         .await
@@ -110,9 +106,8 @@ async fn spawn_sensor_server(
             };
             println!("observation-hub: action connected: {peer}");
             let tx = tx.clone();
-            let engine = engine.clone();
             tokio::spawn(async move {
-                if let Err(e) = ingest_lines(socket, tx, engine).await {
+                if let Err(e) = ingest_lines(socket, tx).await {
                     eprintln!("observation-hub: action stream ended: {e}");
                 }
             });
@@ -171,14 +166,13 @@ async fn serve_http_ping(socket: &mut TcpStream) -> anyhow::Result<()> {
 fn spawn_ebpf_client(
     source: String,
     tx: broadcast::Sender<String>,
-    engine: std::sync::Arc<tokio::sync::Mutex<CorrelationEngine>>,
 ) {
     tokio::spawn(async move {
         loop {
             match TcpStream::connect(&source).await {
                 Ok(stream) => {
                     println!("observation-hub: connected to ebpf source {source}");
-                    if let Err(e) = ingest_lines(stream, tx.clone(), engine.clone()).await {
+                    if let Err(e) = ingest_lines(stream, tx.clone()).await {
                         eprintln!("observation-hub: ebpf stream ended: {e}");
                     }
                 }
@@ -194,7 +188,6 @@ fn spawn_ebpf_client(
 async fn ingest_lines(
     stream: TcpStream,
     tx: broadcast::Sender<String>,
-    engine: std::sync::Arc<tokio::sync::Mutex<CorrelationEngine>>,
 ) -> anyhow::Result<()> {
     let mut lines = BufReader::new(stream).lines();
 
@@ -208,25 +201,8 @@ async fn ingest_lines(
             continue;
         };
 
-        publish_upstream(&tx, &engine, &upstream).await;
+        let _ = tx.send(upstream.to_json_line());
     }
 
     Ok(())
-}
-
-async fn publish_upstream(
-    tx: &broadcast::Sender<String>,
-    engine: &std::sync::Arc<tokio::sync::Mutex<CorrelationEngine>>,
-    upstream: &UpstreamEvent,
-) {
-    let mut engine = engine.lock().await;
-    for output in engine.ingest(upstream) {
-        let line = match output {
-            CorrelationOutput::Passthrough(event) => event.to_json_line(),
-            CorrelationOutput::Correlated(correlated) => {
-                StreamEvent::ActionCorrelated(correlated).to_json_line()
-            }
-        };
-        let _ = tx.send(line);
-    }
 }

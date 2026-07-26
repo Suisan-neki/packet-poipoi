@@ -1,12 +1,14 @@
 use anyhow::Context as _;
 use clap::Parser;
 use serde_json::json;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::time::{Instant, MissedTickBehavior, timeout};
+
+const ATTACK_PAYLOAD_BYTES: usize = 128;
 
 #[derive(Debug, Clone, Parser)]
 struct Opt {
@@ -34,6 +36,9 @@ struct Opt {
     /// xdp-helloの実行時モード変更API。
     #[arg(long, default_value = "127.0.0.1:9020")]
     defense_control: String,
+    /// experiment-runnerから負荷を開始・停止する制御API。
+    #[arg(long, default_value = "127.0.0.1:9030")]
+    control_listen: String,
 }
 
 #[tokio::main]
@@ -44,11 +49,13 @@ async fn main() -> anyhow::Result<()> {
 
     spawn_health_worker(opt.clone());
     spawn_attack_worker(opt.clone(), attack_active.clone(), packets_sent.clone()).await?;
+    spawn_control_server(opt.clone(), attack_active.clone(), packets_sent.clone()).await?;
 
     println!("traffic-node:");
     println!("  normal HTTP: http://{}:{}/api/ping", opt.target, opt.http_port);
     println!("  attack UDP:  {}:{} ({} pps)", opt.target, opt.attack_port, opt.attack_pps);
     println!("commands: attack | stop | monitor | protect | status | quit");
+    println!("experiment control: {}", opt.control_listen);
 
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
@@ -84,6 +91,85 @@ async fn main() -> anyhow::Result<()> {
     }
 
     attack_active.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+async fn spawn_control_server(
+    opt: Arc<Opt>,
+    attack_active: Arc<AtomicBool>,
+    packets_sent: Arc<AtomicU64>,
+) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(&opt.control_listen)
+        .await
+        .with_context(|| format!("failed to bind traffic control on {}", opt.control_listen))?;
+    println!("traffic control listening on {}", opt.control_listen);
+
+    tokio::spawn(async move {
+        loop {
+            let (socket, peer) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(error) => {
+                    eprintln!("traffic control accept failed: {error}");
+                    continue;
+                }
+            };
+            let opt = opt.clone();
+            let attack_active = attack_active.clone();
+            let packets_sent = packets_sent.clone();
+            tokio::spawn(async move {
+                let (reader, mut writer) = socket.into_split();
+                let mut lines = BufReader::new(reader).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let command = serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .get("command")
+                                .and_then(|command| command.as_str())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_else(|| line.trim().to_ascii_lowercase());
+
+                    let (active, state_changed) = match command.as_str() {
+                        "start" | "attack" => {
+                            attack_active.store(true, Ordering::Relaxed);
+                            (true, true)
+                        }
+                        "stop" => {
+                            attack_active.store(false, Ordering::Relaxed);
+                            (false, true)
+                        }
+                        "status" => (attack_active.load(Ordering::Relaxed), false),
+                        _ => {
+                            let response = json!({
+                                "ok": false,
+                                "error": "command must be start, stop, or status",
+                            });
+                            let _ = writer.write_all(response.to_string().as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            continue;
+                        }
+                    };
+
+                    let total = packets_sent.load(Ordering::Relaxed);
+                    if state_changed {
+                        publish_attack_state(&opt, active, total, 0).await;
+                    }
+                    let response = json!({
+                        "ok": true,
+                        "active": active,
+                        "packets_sent": total,
+                        "target_pps": opt.attack_pps,
+                        "payload_bytes": ATTACK_PAYLOAD_BYTES,
+                    });
+                    let _ = writer.write_all(response.to_string().as_bytes()).await;
+                    let _ = writer.write_all(b"\n").await;
+                    println!("traffic command from {peer}: {command}");
+                }
+            });
+        }
+    });
+
     Ok(())
 }
 
@@ -136,7 +222,7 @@ async fn spawn_attack_worker(
         send_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut report_interval = tokio::time::interval(Duration::from_secs(1));
         report_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        let payload = [0x50_u8; 128];
+        let payload = [0x50_u8; ATTACK_PAYLOAD_BYTES];
         let mut previous_total = 0_u64;
 
         loop {

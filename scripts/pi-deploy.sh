@@ -1,48 +1,40 @@
 #!/usr/bin/env bash
-# ラズパイへ action-node をクロスコンパイルして配置する。
-# 実行例: PI_HOST=pi@192.168.1.50 ./scripts/pi-deploy.sh
+# Pi Aへtraffic-node、Pi Bへexperiment-runnerを配置する。
+# 例: PI_HOST=pi@192.168.1.11 ROLE=traffic ./scripts/pi-deploy.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PI_HOST="${PI_HOST:-}"
 PI_TARGET="${PI_TARGET:-aarch64-unknown-linux-gnu}"
+ROLE="${ROLE:-traffic}"
 
 if [[ -z "$PI_HOST" ]]; then
-  echo "PI_HOST を指定してください。例: PI_HOST=pi@192.168.1.50 $0" >&2
+  echo "PI_HOSTを指定してください。" >&2
   exit 1
 fi
 
-if ! rustup target list --installed | grep -q "$PI_TARGET"; then
-  echo "==> rustup target add $PI_TARGET"
-  rustup target add "$PI_TARGET"
-fi
+case "$ROLE" in
+  traffic) PACKAGE="traffic-node" ;;
+  experiment) PACKAGE="experiment-runner" ;;
+  *)
+    echo "ROLEはtrafficまたはexperimentです。" >&2
+    exit 1
+    ;;
+esac
 
 if ! command -v cross >/dev/null 2>&1; then
-  echo "cross が見つかりません。cargo install cross するか、Pi 上で直接 cargo build --features gpio してください。" >&2
+  echo "crossが必要です。Pi上で直接cargo buildする方法でも構いません。" >&2
   exit 1
 fi
 
-echo "==> cross build action-node (gpio)"
-cross build --release --manifest-path "$REPO_ROOT/tools/Cargo.toml" -p action-node --features gpio --target "$PI_TARGET"
+cross build \
+  --release \
+  --manifest-path "$REPO_ROOT/tools/Cargo.toml" \
+  -p "$PACKAGE" \
+  --target "$PI_TARGET"
 
-BIN="$REPO_ROOT/tools/target/$PI_TARGET/release/action-node"
+BIN="$REPO_ROOT/tools/target/$PI_TARGET/release/$PACKAGE"
 REMOTE_DIR="~/packet-journey-bin"
-
-echo "==> deploy to $PI_HOST"
 ssh "$PI_HOST" "mkdir -p $REMOTE_DIR"
-scp "$BIN" "$PI_HOST:$REMOTE_DIR/action-node"
-
-ssh "$PI_HOST" "cat > $REMOTE_DIR/action-node.service << 'UNIT'
-[Unit]
-Description=xdp-hello action-node
-After=network-online.target
-
-[Service]
-ExecStart=$REMOTE_DIR/action-node --gpio --hub HUB_IP:9001 --http-host HUB_IP --src-ip PI_IP
-Restart=on-failure
-User=pi
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-echo '配置完了。action-node.service の HUB_IP / PI_IP を編集して systemctl enable --user してください。'"
+scp "$BIN" "$PI_HOST:$REMOTE_DIR/$PACKAGE"
+echo "deployed $PACKAGE to $PI_HOST:$REMOTE_DIR/$PACKAGE"
