@@ -1,144 +1,142 @@
 # PACKET JOURNEY
 
-**見えない通信をつかまえよう。**
+**同じ入口へ負荷が来ても、必要なサービスを守れるか。**
 
-## 作品概要
+Packet Journeyは、2台のRaspberry PiとeBPF/XDPを使ったライブネットワーク実験です。
 
-ボタンを押す、ページが開く、メッセージが届く——いつもの操作の裏側では、小さな**パケット**というデータの荷物が生まれ、ネットワークを旅します。でもそれは目に見えない。だから「通信って、いま何が起きているんだろう？」と思っても、ピンとこない。
+Pi AからPi Bへテスト用のUDP負荷を送りながら、同じPi B上のHTTPサービスへGETを続けます。Pi Bでは、NIC直後で動くXDPプログラムが指定UDPだけを破棄します。画面では「何packet捨てたか」だけでなく、負荷中も同じHTTPサービスが応答したかまで確認します。
 
-**PACKET JOURNEY** は、その**見えない旅**を追いかける展示作品です。来場者に伝えたいのは、専門用語の暗記ではなく、**パケットを捕捉する面白さ**——自分の操作が裏側でどうデータになり、カーネルの入口でどう見つかるのか、という「あ、そういうことか」を体感してもらうことです。
+**Webデモ:** https://suisan-neki.github.io/packet-journey/
 
-**Web デモ:** https://suisan-neki.github.io/packet-journey/
+Webデモの数値は実機出力のサンプルです。Tauri版では、2台のRaspberry PiとXDPから届くイベントだけで画面が進みます。
 
-（本番展示では机のラズパイの物理ボタンから通信を起こします。Web デモでは画面のボタンで同じ流れを再現できます。）
+## 何を比べているのか
 
-### なぜ作ったか
+UDPとHTTPの性能や安全性を比べる実験ではありません。
 
-自分は**低レイヤの仕組み**が好きです。アプリの画面の向こう側——カーネルがパケットをどう受け取り、どう記録するのか——に、もっと多くの人が触れられる体験を作りたかった。
+| 通信 | この実験での役割 | 取得元 |
+| --- | --- | --- |
+| UDP :4000 | 意図的に加えるテスト負荷 | Pi Aの`traffic-node` |
+| HTTP :8080 | サービスが動き続けているか測る指標 | Pi Aの実HTTP GET |
 
-一方で、OSI 参照モデルや eBPF の話は、資料を読むだけだと「知識」で止まりがちです。実際にボタンを押して通信を起こし、その瞬間に流れたパケットを**自分の目でつかまえる**。その体験こそが、通信の理解を一段深くしてくれると考えています。
+UDP :4000は、展示用ポリシーで遮断対象に指定しています。UDP一般を危険な通信として扱うものではありません。
 
-### 来場者が体験すること
+## デモの流れ
 
-展示ブースでは、**机のラズパイにつないだ物理ボタン**がスタート地点です。
+画面はスクロールせず、同じ通信経路を4段階で追います。
 
-1. **ボタンを押す** — 「状態確認」という、人がわかる操作が生まれる（L7）
-2. **通信が走る** — ラズパイから HTTP リクエストが飛び、パケットが出発地と目的地を持って進む（L4 · L3）
-3. **XDP がつかまえる** — Linux カーネルの入口で eBPF プログラムがパケットを観測する（L2）
-4. **大画面に正体が現れる** — 「さっき押したボタン」と「いま流れたパケット」が同じ出来事だとわかる
+1. **通常時を測る**  
+   負荷を加える前に、HTTP :8080のstatusとレイテンシを記録します。
+2. **負荷を重ねる**  
+   HTTPを測り続けたまま、同じPi BへUDP :4000の負荷を加えます。
+3. **入口で分ける**  
+   XDPが指定UDPをnetwork stackやアプリへ届く前に`XDP_DROP`します。HTTPは通過します。
+4. **前後を比べる**  
+   通常時と負荷中で、同じHTTP GETの結果を比較します。
 
-ボタンを押すたびに、背景の通信の流れの中から**自分の操作に対応するパケット**が浮かび上がる。この一連の流れを、画面では**旅**としてたどります。高いレイヤの「操作」から低いレイヤの「パケット」へ視点が降りていく感覚を、ナラティブとアニメーションで伝えています。
+Webデモは自動再生され、各段階をクリックして止めることもできます。実機版は`traffic_health`、`attack_state`、`defense_mode`、`stats`イベントに同期します。
 
-### 技術的なこだわり
+## 実測値の出どころ
 
-作品全体は **Rust** で実装しています。型で所有権や失敗を表現し、観測パイプライン全体を一貫した設計でつないでいます。
+画面の結論は、演出用タイマーではなく次のイベントから組み立てます。
 
-| レイヤ | 役割 | 実装 |
-|--------|------|------|
-| L2 観測 | カーネル入口でパケットを捕捉 | XDP / eBPF（Aya） |
-| 相関 | 物理操作と flow を時刻・IP で突き合わせ | `observation-core` |
-| 配信 | 上流イベントを統合しディスプレイへ | `observation-hub` |
-| 物理入力 | GPIO ボタン → HTTP 通信の起動 | ラズパイ + `action-node` |
-| 可視化 | 旅 UI・ライブストリーム・観測記録 | Tauri ダッシュボード |
+| 画面上の値 | イベント / 実装 |
+| --- | --- |
+| UDP送信量 | `traffic-node`の`attack_state.pps` |
+| HTTP status / latency | 1秒ごとの`traffic_health` |
+| XDP_PASS / XDP_DROP | per-CPU BPF mapを500msごとに合算した`stats` |
+| MONITOR / PROTECT | XDPの実行時設定と`defense_mode` |
+| 個別packet | RingBufから配信する`flow` |
 
-低レイヤの観測（eBPF）と高レイヤの操作（ボタン）を、**相関エンジン**で結びつけるのがこの作品の核です。単にパケットを並べるのではなく、「あなたが起こした通信だ」とわかる瞬間を作ることで、観測技術の面白さを体験として届けます。
+RingBufは個別packetの表示経路です。混雑時の集計値はRingBufの受信数ではなく、カーネルのper-CPU counterを正とします。
 
-### これから
-
-いまの展示は「旅の骨格」ができた段階です。ここからは**没入感**をさらに高めていきます。
-
-- ボタンを押した瞬間のフィードバック（光・音・画面の連動）を強化する
-- パケットがレイヤを降りていく演出を、より直感的にする
-- 来場者が「自分が通信を起こした」と実感できる導線を磨く
-
-通信の奥深さを、読むものではなく**体験するもの**にしていく——それが PACKET JOURNEY の目指す方向です。
-
-## 展示で見せること
-
-大画面のディスプレイでは、操作からパケット捕捉までを**旅**としてたどります。
-
-### 1. 旅のはじまり（L7）
-
-机のボタンを押すと、操作が生まれます。「状態確認」のような、人がわかる動きがここから始まります。
-
-### 2. 宛先を持って進む（L4 · L3）
-
-操作はパケットという形に変わり、出発地と目的地を持ってネットワークを進みます。TCP や UDP といった届け方、IP アドレスという宛先が、旅の途中で現れます。
-
-### 3. カーネルの入口で待つ（L2）
-
-旅の途中、Linux カーネルの入口で **XDP / eBPF** がパケットを見張っています。通り過ぎる通信を捕捉し、「いま、何が流れたか」を記録します。
-
-### つかまえたパケットの正体
-
-ボタン操作から生まれた通信を XDP が見つけると、画面に**観測記録**が表示されます。どこから来て、どこへ向かったのか——画面に見えていた操作と、裏側で流れたパケットが、同じ出来事だとわかります。
-
-そのほか、背景では「いま、この瞬間にも流れている通信」がリアルタイムで流れ続け、パケットの世界が生きていることを感じられます。
-
-## 技術スタック
-
-| 領域 | 技術 |
-|------|------|
-| パケット観測 | eBPF / XDP（Rust + Aya） |
-| イベント統合 | `observation-hub`（操作と flow の相関・配信） |
-| 物理入力 | ラズパイ + `action-node`（GPIO / HTTP） |
-| 可視化 | 展示用ディスプレイ UI（Tauri / GitHub Pages デモ） |
-
-学習メモは [docs/journal/](docs/journal/) の日付ファイルに書いています。
-
-## ディレクトリ
-
-| パス | 役割 |
-|------|------|
-| [xdp-hello/](xdp-hello/) | XDP/eBPF 本体とユーザー空間プログラム（Lima VM 上で実行） |
-| [observation-core/](observation-core/) | 観測イベント型・物理操作と flow の相関 |
-| [tools/](tools/) | `observation-hub` / `action-node` / `mock-sensor` |
-| [dashboard/](dashboard/) | 展示用ディスプレイ UI（パケットの旅の可視化） |
-| [scripts/](scripts/) | Mac / Lima / ラズパイ / 展示向けスクリプト |
-
-## Mac 一台でできること
-
-```bash
-# 1. observation-hub + mock-sensor + Tauri を一括起動
-./scripts/mac-dev.sh
-
-# 2. 別ターミナルで物理ボタン模擬（Enter で HTTP + physical_action）
-cargo run --release --manifest-path tools/Cargo.toml -p action-node
-
-# 3. 別ターミナルで Lima の eBPF
-./scripts/lima-sync.sh --run
-
-# 4. Lima 内で擬似トラフィック
-./scripts/lima-netlab.sh flood
-```
-
-### データの流れ
+## 構成
 
 ```text
-[Lima VM] xdp-hello ──9000──┐
-                             ├── observation-hub ──9010── ディスプレイ
-[Mac/Pi]  action-node ──9001─┘        │
-         HTTP :8080 ──────────────────┘（実パケット → XDP が観測）
+Raspberry Pi A
+  traffic-node
+    ├─ HTTP GET :8080 ───────────────┐
+    └─ UDP load :4000 ───────────────┤
+                                      ▼
+Raspberry Pi B                    NIC / XDP
+  HTTP service :8080  ◀── PASS ─── TCP
+  application         ×── DROP ─── UDP :4000
+                                      │
+                                      ├─ flow / stats :9000
+                                      └─ control API :9020
+
+traffic-node ── health / attack state :9001 ──┐
+XDP events ────────────────────────────────────┤
+                                              ▼
+                                      observation-hub :9010
+                                              │
+                                              ▼
+                                      Tauri dashboard
 ```
 
-## 技育博・展示
+### 主な実装
+
+| パス | 役割 |
+| --- | --- |
+| `xdp-hello/` | Rust + AyaによるXDP/eBPFプログラム、per-CPU counter、実行時モード切替 |
+| `observation-core/` | NDJSONイベント型と上流イベントの解釈 |
+| `tools/traffic-node/` | HTTPヘルスチェック、UDP負荷生成、XDP制御 |
+| `tools/observation-hub/` | 上流イベントを統合してダッシュボードへ配信 |
+| `dashboard/` | Tauri / Reactによる展示画面、GitHub Pages用サンプル |
+
+## 操作
+
+Pi Aの`traffic-node`では、標準入力から次の操作を行います。
+
+```text
+attack   UDP負荷を開始
+stop     UDP負荷を停止
+monitor  XDPを観測モードへ変更
+protect  XDPを防御モードへ変更
+status   現在の送信状態を表示
+quit     終了
+```
+
+起動例:
 
 ```bash
-./scripts/booth.sh
+cargo run --release --manifest-path tools/Cargo.toml -p traffic-node -- \
+  --hub 192.168.1.20:9001 \
+  --target 192.168.1.20 \
+  --defense-control 192.168.1.20:9020
 ```
 
-ラズパイへ `action-node` を配置する場合:
+Pi B:
 
 ```bash
-PI_HOST=pi@192.168.1.50 ./scripts/pi-deploy.sh
-# Pi 上: --gpio --hub <MacのIP>:9001 --http-host <MacのIP> --src-ip <PiのIP>
+cargo run --release --manifest-path xdp-hello/Cargo.toml -p xdp-hello -- \
+  --iface eth0 \
+  --listen 0.0.0.0:9000 \
+  --control-listen 0.0.0.0:9020 \
+  --defense-mode monitor \
+  --blocked-udp-port 4000
 ```
 
-## 個別起動
+ダッシュボード:
 
 ```bash
-cargo run --release --manifest-path tools/Cargo.toml -p observation-hub
-cargo run --release --manifest-path tools/Cargo.toml -p action-node
-cargo run --release --manifest-path tools/Cargo.toml -p mock-sensor -- --scenario overheat
-cd dashboard && npm install && npm run tauri dev
+cd dashboard
+npm install
+npm run tauri dev
 ```
+
+GitHub Pages用:
+
+```bash
+cd dashboard
+npm install
+npm run build:pages
+```
+
+## まだ実装していないこと
+
+- 3Dプリンタ製の物理コントローラから`attack / protect / stop`を操作するGPIOアダプタ
+- 通常時と負荷中の計測を一つの実験IDで保存する機能
+- 複数の負荷条件やXDPポリシーを選ぶ比較実験
+
+物理コントローラは既存のcontrol APIを呼ぶ構成を想定しています。現時点の実装はCLI操作までです。
