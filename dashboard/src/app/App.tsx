@@ -10,6 +10,14 @@ import { isWebDemo, subscribeStream } from "../stream.js";
 type DropPoint = "application" | "netfilter" | "xdp";
 type ExperimentPhase = 0 | 1 | 2 | 3;
 
+interface ExperimentEnvironment {
+  receiver_model: string;
+  kernel_release: string;
+  network_interface: string;
+  mtu: number | null;
+  cpu_governor: string;
+}
+
 interface ExperimentRun {
   experiment_id: string;
   run_id: string;
@@ -23,6 +31,7 @@ interface ExperimentRun {
   cpu_busy_percent: number;
   net_rx_softirq_delta: number;
   xdp_attach_mode: "native" | "generic" | "not_used" | "unknown";
+  environment?: ExperimentEnvironment;
 }
 
 interface HarborEvent extends Partial<ExperimentRun> {
@@ -38,8 +47,11 @@ interface ConditionSummary {
   label: string;
   location: string;
   cpuPercent: number;
+  cpuRange: [number, number];
   softirqPer10k: number;
+  softirqRange: [number, number];
   appReceivePercent: number;
+  appReceiveRange: [number, number];
   repetitions: number;
   attachMode: string;
 }
@@ -130,6 +142,13 @@ const FIXTURE_RUNS: ExperimentRun[] = [
     net_rx_softirq_delta:
       Math.round(Number(softirq) * 3) + (repetition - 2) * 180,
     xdp_attach_mode: attach as ExperimentRun["xdp_attach_mode"],
+    environment: {
+      receiver_model: "Raspberry Pi 5 Model B Rev 1.0",
+      kernel_release: "6.6.51+rpt-rpi-2712",
+      network_interface: "eth0",
+      mtu: 1500,
+      cpu_governor: "performance",
+    },
   })),
 );
 
@@ -160,11 +179,27 @@ function median(values: number[]) {
     : sorted[middle];
 }
 
+function minMax(values: number[]): [number, number] {
+  if (values.length === 0) return [0, 0];
+  return [Math.min(...values), Math.max(...values)];
+}
+
 function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
   return (["application", "netfilter", "xdp"] as DropPoint[]).map(
     dropPoint => {
       const conditionRuns = runs.filter(run => run.drop_point === dropPoint);
       const representative = conditionRuns.at(-1);
+      const cpuValues = conditionRuns.map(run => run.cpu_busy_percent);
+      const softirqValues = conditionRuns.map(run =>
+        run.packets_sent === 0
+          ? 0
+          : run.net_rx_softirq_delta * 10_000 / run.packets_sent,
+      );
+      const appValues = conditionRuns.map(run =>
+        run.packets_sent === 0
+          ? 0
+          : run.packets_received_by_app * 100 / run.packets_sent,
+      );
       return {
         dropPoint,
         label:
@@ -179,23 +214,12 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
             : dropPoint === "netfilter"
               ? "network stack"
               : "driver entry",
-        cpuPercent: median(
-          conditionRuns.map(run => run.cpu_busy_percent),
-        ),
-        softirqPer10k: median(
-          conditionRuns.map(run =>
-            run.packets_sent === 0
-              ? 0
-              : run.net_rx_softirq_delta * 10_000 / run.packets_sent,
-          ),
-        ),
-        appReceivePercent: median(
-          conditionRuns.map(run =>
-            run.packets_sent === 0
-              ? 0
-              : run.packets_received_by_app * 100 / run.packets_sent,
-          ),
-        ),
+        cpuPercent: median(cpuValues),
+        cpuRange: minMax(cpuValues),
+        softirqPer10k: median(softirqValues),
+        softirqRange: minMax(softirqValues),
+        appReceivePercent: median(appValues),
+        appReceiveRange: minMax(appValues),
         repetitions: conditionRuns.length,
         attachMode: representative?.xdp_attach_mode ?? "unknown",
       };
@@ -208,6 +232,21 @@ function formatNumber(value: number, digits = 0) {
     maximumFractionDigits: digits,
     minimumFractionDigits: digits,
   }).format(value);
+}
+
+function formatRange(
+  [minimum, maximum]: [number, number],
+  digits = 1,
+  suffix = "",
+) {
+  return `${formatNumber(minimum, digits)}–${formatNumber(maximum, digits)}${suffix}`;
+}
+
+function predictionLabel(dropPoint: DropPoint | null) {
+  if (dropPoint === "application") return "Application";
+  if (dropPoint === "netfilter") return "nftables";
+  if (dropPoint === "xdp") return "XDP";
+  return "未回答";
 }
 
 function ShipMark() {
@@ -277,6 +316,70 @@ function LayerPath({ dropPoint }: { dropPoint: DropPoint }) {
   );
 }
 
+function PredictionIntro({
+  onChoose,
+  onSkip,
+}: {
+  onChoose: (dropPoint: DropPoint) => void;
+  onSkip: () => void;
+}) {
+  const choices: Array<{
+    dropPoint: DropPoint;
+    label: string;
+    location: string;
+  }> = [
+    {
+      dropPoint: "application",
+      label: "Application",
+      location: "全部通してから捨てる",
+    },
+    {
+      dropPoint: "netfilter",
+      label: "nftables",
+      location: "カーネルの途中で捨てる",
+    },
+    {
+      dropPoint: "xdp",
+      label: "XDP",
+      location: "NIC直後で捨てる",
+    },
+  ];
+
+  return (
+    <div className="prediction-backdrop">
+      <section className="prediction-panel" aria-labelledby="prediction-title">
+        <span>BEFORE THE DEMO / まず予想する</span>
+        <h2 id="prediction-title">
+          同じpacketなら、
+          <strong>どこで捨てるとPiの仕事が最も減る？</strong>
+        </h2>
+        <p>
+          変えるのは停止位置だけです。予想を1つ選ぶと、
+          同じ負荷を3つの経路で順に測ります。
+        </p>
+        <div className="prediction-choices">
+          {choices.map((choice, index) => (
+            <button
+              type="button"
+              key={choice.dropPoint}
+              onClick={() => onChoose(choice.dropPoint)}
+            >
+              <b>0{index + 1}</b>
+              <span>
+                <strong>{choice.label}</strong>
+                <small>{choice.location}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+        <button className="prediction-skip" type="button" onClick={onSkip}>
+          予想せず実験を見る →
+        </button>
+      </section>
+    </div>
+  );
+}
+
 function ConditionStage({
   dropPoint,
   summary,
@@ -303,29 +406,43 @@ function ConditionStage({
           <div>
             <small>CPU busy · 中央値</small>
             <strong>{formatNumber(summary.cpuPercent, 1)}%</strong>
+            <em>{formatRange(summary.cpuRange, 1, "%")}</em>
+          </div>
+          <div>
+            <small>NET_RX / 1万packet</small>
+            <strong>{formatNumber(summary.softirqPer10k)}</strong>
+            <em>{formatRange(summary.softirqRange, 0)}</em>
           </div>
           <div>
             <small>アプリへ到達 · 中央値</small>
             <strong>{formatNumber(summary.appReceivePercent, 1)}%</strong>
+            <em>{formatRange(summary.appReceiveRange, 1, "%")}</em>
           </div>
           <div>
-            <small>反復</small>
-            <strong>{summary.repetitions} runs</strong>
+            <small>{dropPoint === "xdp" ? "実attach mode" : "反復"}</small>
+            <strong>
+              {dropPoint === "xdp"
+                ? summary.attachMode
+                : `${summary.repetitions} runs`}
+            </strong>
+            <em>{dropPoint === "xdp" ? `${summary.repetitions} runs` : "中央値 / min–max"}</em>
           </div>
-          {dropPoint === "xdp" && (
-            <div>
-              <small>実attach mode</small>
-              <strong>{summary.attachMode}</strong>
-            </div>
-          )}
         </div>
       </section>
     </div>
   );
 }
 
-function CompareStage({ summaries }: { summaries: ConditionSummary[] }) {
+function CompareStage({
+  summaries,
+  prediction,
+}: {
+  summaries: ConditionSummary[];
+  prediction: DropPoint | null;
+}) {
   const bestCpu = Math.min(...summaries.map(item => item.cpuPercent));
+  const measuredBest =
+    summaries.find(summary => summary.cpuPercent === bestCpu)?.dropPoint ?? null;
   return (
     <div className="compare-stage">
       <section className="compare-heading">
@@ -360,14 +477,17 @@ function CompareStage({ summaries }: { summaries: ConditionSummary[] }) {
               <strong>{summary.label}</strong>
               <small>{summary.location}</small>
             </span>
-            <span role="cell">
+            <span className="metric-cell" role="cell">
               <strong>{formatNumber(summary.cpuPercent, 1)}%</strong>
+              <small>{formatRange(summary.cpuRange, 1, "%")}</small>
             </span>
-            <span role="cell">
+            <span className="metric-cell" role="cell">
               <strong>{formatNumber(summary.softirqPer10k)}</strong>
+              <small>{formatRange(summary.softirqRange, 0)}</small>
             </span>
-            <span role="cell">
+            <span className="metric-cell" role="cell">
               <strong>{formatNumber(summary.appReceivePercent, 1)}%</strong>
+              <small>{formatRange(summary.appReceiveRange, 1, "%")}</small>
             </span>
             <span role="cell">
               {summary.dropPoint === "application"
@@ -381,7 +501,13 @@ function CompareStage({ summaries }: { summaries: ConditionSummary[] }) {
       </div>
 
       <div className="result-statement">
-        <span>この実験が示すこと</span>
+        <span>
+          <small>あなたの予想</small>
+          {predictionLabel(prediction)}
+          <i>→</i>
+          <small>CPU実測最小</small>
+          {predictionLabel(measuredBest)}
+        </span>
         <strong>
           早く捨てるほど、後段へ渡す仕事を減らせる。
           XDPの価値をDROP数ではなく処理差で示す。
@@ -409,6 +535,8 @@ export default function App() {
     demo ? DEFAULT_HEALTH : { success: false, latencyMs: 0, statusCode: null },
   );
   const [showDetails, setShowDetails] = useState(false);
+  const [prediction, setPrediction] = useState<DropPoint | null>(null);
+  const [showPrediction, setShowPrediction] = useState(true);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -423,6 +551,13 @@ export default function App() {
   function choosePhase(next: number) {
     setPhase(clampPhase(next));
     if (demo) setAutoplay(false);
+  }
+
+  function choosePrediction(dropPoint: DropPoint) {
+    setPrediction(dropPoint);
+    setShowPrediction(false);
+    setPhase(0);
+    if (demo) setAutoplay(true);
   }
 
   function openDetails() {
@@ -492,12 +627,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!demo || !autoplay || showDetails) return;
+    if (!demo || !autoplay || showDetails || showPrediction) return;
     const timer = window.setTimeout(() => {
       setPhase(current => ((current + 1) % 4) as ExperimentPhase);
     }, 7_500);
     return () => window.clearTimeout(timer);
-  }, [autoplay, demo, phase, showDetails]);
+  }, [autoplay, demo, phase, showDetails, showPrediction]);
+
+  useEffect(() => {
+    if (!demo || !showPrediction || !autoplay) return;
+    const timer = window.setTimeout(() => setShowPrediction(false), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [autoplay, demo, showPrediction]);
 
   useEffect(() => {
     if (showDetails) {
@@ -629,7 +770,13 @@ export default function App() {
               summary={activeSummary}
             />
           ) : (
-            <CompareStage summaries={summaries} />
+            <CompareStage summaries={summaries} prediction={prediction} />
+          )}
+          {showPrediction && (
+            <PredictionIntro
+              onChoose={choosePrediction}
+              onSkip={() => setShowPrediction(false)}
+            />
           )}
         </section>
 
@@ -642,6 +789,17 @@ export default function App() {
             <p>公開版の数値はUI確認用fixtureです。実機版では計測結果だけを表示します。</p>
           )}
           <nav aria-label="画面の操作">
+            <button
+              type="button"
+              className="prediction-reset"
+              onClick={() => {
+                setPhase(0);
+                setPrediction(null);
+                setShowPrediction(true);
+              }}
+            >
+              予想から
+            </button>
             <button
               type="button"
               onClick={() => choosePhase(phase - 1)}
@@ -736,6 +894,30 @@ export default function App() {
                   実際にattachできたmodeを各runへ保存します。
                 </p>
               </article>
+            </div>
+            <div className="environment-strip">
+              <span>RECORDED ENVIRONMENT</span>
+              <dl>
+                <div>
+                  <dt>Receiver</dt>
+                  <dd>{representative?.environment?.receiver_model || "unknown"}</dd>
+                </div>
+                <div>
+                  <dt>Kernel</dt>
+                  <dd>{representative?.environment?.kernel_release || "unknown"}</dd>
+                </div>
+                <div>
+                  <dt>NIC / MTU</dt>
+                  <dd>
+                    {representative?.environment?.network_interface || "unknown"} /{" "}
+                    {representative?.environment?.mtu ?? "unknown"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>CPU governor</dt>
+                  <dd>{representative?.environment?.cpu_governor || "unknown"}</dd>
+                </div>
+              </dl>
             </div>
           </section>
         </div>

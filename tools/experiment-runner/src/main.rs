@@ -1,12 +1,12 @@
 use anyhow::{bail, Context as _};
 use clap::Parser;
-use observation_core::{DropPoint, ExperimentRun, XdpAttachMode};
+use observation_core::{DropPoint, ExperimentEnvironment, ExperimentRun, XdpAttachMode};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UdpSocket};
@@ -40,6 +40,9 @@ struct Opt {
     /// nftablesで遮断するUDP宛先port。
     #[arg(long, default_value_t = 4000)]
     udp_port: u16,
+    /// Pi Bで実験対象にしているnetwork interface。
+    #[arg(long, default_value = "eth0")]
+    interface: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -96,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
     let received = Arc::new(AtomicU64::new(0));
     spawn_udp_sink(&opt.udp_listen, received.clone()).await?;
     let _nft_guard = NftGuard;
+    let environment = read_experiment_environment(&opt.interface);
     let experiment_id = format!(
         "drop-point-{}",
         SystemTime::now()
@@ -118,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
                 repetition,
                 drop_point,
                 &received,
+                &environment,
             )
             .await?;
             run.validate()
@@ -155,6 +160,7 @@ async fn run_condition(
     repetition: u16,
     drop_point: DropPoint,
     received: &AtomicU64,
+    environment: &ExperimentEnvironment,
 ) -> anyhow::Result<ExperimentRun> {
     let attach_mode = configure_drop_point(opt, drop_point).await?;
     tokio::time::sleep(Duration::from_secs(opt.settle_secs)).await;
@@ -191,7 +197,34 @@ async fn run_condition(
         cpu_busy_percent: cpu_busy_percent(cpu_before, cpu_after),
         net_rx_softirq_delta: softirq_after.saturating_sub(softirq_before),
         xdp_attach_mode: attach_mode,
+        environment: environment.clone(),
     })
+}
+
+fn read_experiment_environment(interface: &str) -> ExperimentEnvironment {
+    ExperimentEnvironment {
+        receiver_model: read_trimmed("/sys/firmware/devicetree/base/model"),
+        kernel_release: read_trimmed("/proc/sys/kernel/osrelease"),
+        network_interface: interface.to_string(),
+        mtu: read_trimmed(&format!("/sys/class/net/{interface}/mtu"))
+            .parse::<u32>()
+            .ok(),
+        cpu_governor: read_trimmed(
+            "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
+        ),
+    }
+}
+
+fn read_trimmed(path: &str) -> String {
+    fs::read_to_string(path)
+        .map(|value| {
+            value
+                .trim_matches(|character: char| {
+                    character == '\0' || character.is_whitespace()
+                })
+                .to_string()
+        })
+        .unwrap_or_else(|_| "unknown".to_string())
 }
 
 async fn configure_drop_point(opt: &Opt, drop_point: DropPoint) -> anyhow::Result<XdpAttachMode> {
@@ -402,6 +435,17 @@ mod tests {
         assert_eq!(
             condition_order(3),
             [DropPoint::Xdp, DropPoint::Application, DropPoint::Netfilter]
+        );
+    }
+
+    #[test]
+    fn trims_device_tree_null_terminator() {
+        let value = "Raspberry Pi 5 Model B Rev 1.0\0\n";
+        assert_eq!(
+            value.trim_matches(|character: char| {
+                character == '\0' || character.is_whitespace()
+            }),
+            "Raspberry Pi 5 Model B Rev 1.0"
         );
     }
 }

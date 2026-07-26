@@ -40,6 +40,24 @@ impl Default for XdpAttachMode {
     }
 }
 
+/// 実測値の解釈に必要なPi B側の実行環境。
+///
+/// 古いrunも読めるよう各項目は空値を許す。比較結果を公開するときは、
+/// dashboardの計測方法パネルでunknownが残っていないことを確認する。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ExperimentEnvironment {
+    #[serde(default)]
+    pub receiver_model: String,
+    #[serde(default)]
+    pub kernel_release: String,
+    #[serde(default)]
+    pub network_interface: String,
+    #[serde(default)]
+    pub mtu: Option<u32>,
+    #[serde(default)]
+    pub cpu_governor: String,
+}
+
 /// 1条件ぶんの再現可能な実測結果。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExperimentRun {
@@ -56,6 +74,8 @@ pub struct ExperimentRun {
     pub net_rx_softirq_delta: u64,
     #[serde(default)]
     pub xdp_attach_mode: XdpAttachMode,
+    #[serde(default)]
+    pub environment: ExperimentEnvironment,
 }
 
 impl ExperimentRun {
@@ -147,6 +167,7 @@ mod tests {
             } else {
                 XdpAttachMode::NotUsed
             },
+            environment: ExperimentEnvironment::default(),
         }
     }
 

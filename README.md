@@ -50,7 +50,7 @@ Packet Journeyの主役はanimationではなく比較実験です。
 - native XDPが使えない場合はgenericへのfallbackを結果へ明記
 - public demoのfixtureと実測値を明確に区別
 
-設計判断の根拠は[受賞作・類似作品の調査](docs/RESEARCH_AND_POSITIONING.md)、再現条件は[実験プロトコル](docs/EXPERIMENT_PROTOCOL.md)にまとめています。
+設計判断の根拠は[受賞作・類似作品の調査](docs/RESEARCH_AND_POSITIONING.md)、再現条件は[実験プロトコル](docs/EXPERIMENT_PROTOCOL.md)にまとめています。展示時は[booth playbook](docs/BOOTH_PLAYBOOK.md)と[3D printed packet path](docs/HARDWARE_EXHIBIT.md)を使います。
 
 ## 構成
 
@@ -108,6 +108,7 @@ sudo cargo run --release --manifest-path tools/Cargo.toml -p experiment-runner -
   --traffic-control <PI_A_IP>:9030 \
   --xdp-control 127.0.0.1:9020 \
   --hub 127.0.0.1:9001 \
+  --interface eth0 \
   --duration-secs 15 \
   --repetitions 3
 ```
@@ -137,4 +138,4 @@ npm run build:pages
 
 ## 次に作るもの
 
-3DプリンタでLinux受信経路を5つのblockとして作り、packetが止まった場所だけLEDを点灯させます。Web UIの装飾ではなく、application / nftables / XDPの位置関係を手で追える実験装置にします。
+3DプリンタでLinux受信経路を5つのblockとして作り、packetが止まった場所だけLEDを点灯させます。Web UIの装飾ではなく、application / nftables / XDPの位置関係を手で追える実験装置にします。造形前の検証手順は[hardware exhibit設計](docs/HARDWARE_EXHIBIT.md)にあります。

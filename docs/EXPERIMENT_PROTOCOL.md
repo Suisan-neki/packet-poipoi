@@ -18,6 +18,15 @@
 
 CLIで値を変えた場合、各`experiment_run`へ実値を保存します。
 
+runnerはPi B側の次の環境も各runへ保存します。
+
+- Raspberry Pi model
+- kernel release
+- network interface
+- MTU
+- CPU scaling governor
+- XDP actual attach mode
+
 ## 条件
 
 ### Application
@@ -72,6 +81,13 @@ busy% = (delta_total - delta_idle) / delta_total × 100
 
 サービスが生きているかを見る補助指標です。UDPや停止位置との優劣比較には使いません。
 
+## 集計
+
+- 各条件の代表値は3回の中央値
+- dashboardには中央値とmin–maxを併記
+- 条件間でtargetではなく実送信packet数を確認
+- 3回は展示用の最小構成であり、研究的な一般化には使わない
+
 ## benchmarkを汚さないための処置
 
 - eBPF hot pathでpacketごとの`aya_log`を出さない
@@ -79,6 +95,7 @@ busy% = (delta_total - delta_idle) / delta_total × 100
 - RingBufは画面用sampleであり、packet総数に使わない
 - cumulative counterをrun結果として使わない
 - fixtureと実測streamをbadgeで区別する
+- Pi model / kernel / interface / MTU / governorをrunへ保存する
 
 ## cleanup
 
