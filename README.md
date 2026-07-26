@@ -1,10 +1,12 @@
 # PACKET JOURNEY
 
-**同じ入口へ負荷が来ても、必要なサービスを守れるか。**
+**同じNICへ届くHTTPとUDPを、アプリより前で選別できるか。**
 
 Packet Journeyは、2台のRaspberry PiとeBPF/XDPを使ったライブネットワーク実験です。
 
-Pi AからPi Bへテスト用のUDP負荷を送りながら、同じPi B上のHTTPサービスへGETを続けます。Pi Bでは、NIC直後で動くXDPプログラムが指定UDPだけを破棄します。画面では「何packet捨てたか」だけでなく、負荷中も同じHTTPサービスが応答したかまで確認します。
+Pi Aから、Pi B上のHTTP :8080へGETを送り、同じPi BのNICへテスト用UDP :4000も送ります。Pi Bでは、NIC直後で動くXDPプログラムがprotocolと宛先portを見て、HTTPは`XDP_PASS`、指定UDPは`XDP_DROP`に振り分けます。
+
+画面は「送った」「同じNICへ届いた」「XDPが判定した」「HTTPは届いた」というpacketの旅を4段階で追います。送信量、DROP数、HTTP応答は別々の実測イベントから取得します。
 
 **Webデモ:** https://suisan-neki.github.io/packet-journey/
 
@@ -16,8 +18,8 @@ UDPとHTTPの性能や安全性を比べる実験ではありません。
 
 | 通信 | この実験での役割 | 取得元 |
 | --- | --- | --- |
-| UDP :4000 | 意図的に加えるテスト負荷 | Pi Aの`traffic-node` |
-| HTTP :8080 | サービスが動き続けているか測る指標 | Pi Aの実HTTP GET |
+| HTTP :8080 | XDPを通過させる通信。到達を実HTTP GETで確認 | Pi Aの`traffic-node` |
+| UDP :4000 | 展示用ルールで遮断対象にしたテスト通信 | Pi Aの`traffic-node` |
 
 UDP :4000は、展示用ポリシーで遮断対象に指定しています。UDP一般を危険な通信として扱うものではありません。
 
@@ -25,14 +27,14 @@ UDP :4000は、展示用ポリシーで遮断対象に指定しています。UD
 
 画面はスクロールせず、同じ通信経路を4段階で追います。
 
-1. **通常時を測る**  
-   負荷を加える前に、HTTP :8080のstatusとレイテンシを記録します。
-2. **負荷を重ねる**  
-   HTTPを測り続けたまま、同じPi BへUDP :4000の負荷を加えます。
-3. **入口で分ける**  
-   XDPが指定UDPをnetwork stackやアプリへ届く前に`XDP_DROP`します。HTTPは通過します。
-4. **前後を比べる**  
-   通常時と負荷中で、同じHTTP GETの結果を比較します。
+1. **HTTPを送る**  
+   Pi AからPi BのHTTP :8080へGETを送り、通したい通信を先に確認します。
+2. **UDPも送る**  
+   HTTPを続けたまま、テスト用UDP :4000を同じPi BのNICへ追加します。MONITORモードでは両方を観測して通します。
+3. **XDPで選別する**  
+   PROTECTモードへ切り替え、`UDP && dst_port == 4000`だけをnetwork stackへ入る前に`XDP_DROP`します。それ以外は`XDP_PASS`です。
+4. **実測値で確認する**  
+   Pi AのUDP送信量、カーネルのXDP_DROP数、Pi Aからの実HTTP GETを並べ、送信・判定・到達を確認します。
 
 Webデモは自動再生され、各段階をクリックして止めることもできます。実機版は`traffic_health`、`attack_state`、`defense_mode`、`stats`イベントに同期します。
 
@@ -42,8 +44,8 @@ Webデモは自動再生され、各段階をクリックして止めること�
 
 | 画面上の値 | イベント / 実装 |
 | --- | --- |
+| HTTP送信・到達 | 1秒ごとの`traffic_health` |
 | UDP送信量 | `traffic-node`の`attack_state.pps` |
-| HTTP status / latency | 1秒ごとの`traffic_health` |
 | XDP_PASS / XDP_DROP | per-CPU BPF mapを500msごとに合算した`stats` |
 | MONITOR / PROTECT | XDPの実行時設定と`defense_mode` |
 | 個別packet | RingBufから配信する`flow` |
@@ -136,7 +138,7 @@ npm run build:pages
 ## まだ実装していないこと
 
 - 3Dプリンタ製の物理コントローラから`attack / protect / stop`を操作するGPIOアダプタ
-- 通常時と負荷中の計測を一つの実験IDで保存する機能
+- 送信・XDP判定・HTTP到達を一つの実験IDで保存する機能
 - 複数の負荷条件やXDPポリシーを選ぶ比較実験
 
 物理コントローラは既存のcontrol APIを呼ぶ構成を想定しています。現時点の実装はCLI操作までです。
