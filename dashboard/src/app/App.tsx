@@ -691,7 +691,7 @@ export default function App() {
         <div className="brand">
           <div className="brand-mark"><ShipMark /></div>
           <div>
-            <strong>PACKET JOURNEY</strong>
+            <strong>パケットぽいぽい</strong>
             <small>Raspberry Pi × Rust × eBPF/XDP</small>
           </div>
         </div>

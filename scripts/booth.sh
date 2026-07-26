@@ -32,7 +32,7 @@ LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 LAN_IP="${LAN_IP:-127.0.0.1}"
 
 echo ""
-echo "Packet Journey booth:"
+echo "パケットぽいぽい booth:"
 echo "  dashboard stream : 127.0.0.1:9010"
 echo "  event ingest     : ${LAN_IP}:9001"
 echo "  HTTP canary      : http://${LAN_IP}:8080/api/ping"
