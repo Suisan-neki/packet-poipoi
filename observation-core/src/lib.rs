@@ -1,14 +1,8 @@
-pub mod correlation;
 pub mod events;
-pub mod judgment;
-pub mod mock_fhir;
+pub mod experiment;
 
-pub use correlation::{CorrelationEngine, CorrelationOutput};
 pub use events::{
-    parse_upstream_line, ActionCorrelatedEvent, ActionItem, AlertEvent, AttackStateEvent,
-    CauseAxis, DefenseModeEvent, FlowEvent, GuidanceEvent, MockPatient, PhysicalActionEvent,
-    ScenarioId, SensorEvent, SensorMetric, Severity, SourceRef, StreamEvent, TrafficHealthEvent,
-    UpstreamEvent,
+    parse_upstream_line, AlertEvent, AttackStateEvent, DefenseModeEvent, FlowEvent, StatsEvent,
+    StreamEvent, TrafficHealthEvent, UpstreamEvent,
 };
-pub use judgment::{JudgmentEngine, JudgmentOutput};
-pub use mock_fhir::snapshot_for_scenario;
+pub use experiment::{DropPoint, ExperimentRun, ExperimentRunError, XdpAttachMode};

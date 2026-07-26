@@ -24,6 +24,28 @@ enum DefenseMode {
     Protect,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum XdpModePreference {
+    Auto,
+    Native,
+    Generic,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum XdpAttachMode {
+    Native,
+    Generic,
+}
+
+impl XdpAttachMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Generic => "generic",
+        }
+    }
+}
+
 impl DefenseMode {
     fn as_u32(self) -> u32 {
         match self {
@@ -73,6 +95,9 @@ struct Opt {
     /// protect時に遮断する負荷通信専用UDPポート。
     #[clap(long, default_value_t = 4000)]
     blocked_udp_port: u16,
+    /// autoはnativeを試し、NIC/driverが非対応ならgenericへフォールバックする。
+    #[clap(long, value_enum, default_value = "auto")]
+    xdp_mode: XdpModePreference,
 }
 
 #[tokio::main]
@@ -131,10 +156,15 @@ async fn main() -> anyhow::Result<()> {
     let config = Arc::new(Mutex::new(config));
     let current_mode = Arc::new(AtomicU32::new(opt.defense_mode.as_u32()));
 
+    let program: &mut Xdp = ebpf.program_mut("xdp_hello").unwrap().try_into()?;
+    program.load()?;
+    let attach_mode = attach_xdp(program, &opt.iface, opt.xdp_mode)?;
+
     println!(
-        "defense mode={} blocked_udp_port={}",
+        "defense mode={} blocked_udp_port={} attach_mode={}",
         opt.defense_mode.as_str(),
-        opt.blocked_udp_port
+        opt.blocked_udp_port,
+        attach_mode.as_str(),
     );
 
     // 地上へ流す NDJSON 行をブロードキャストするチャネル。
@@ -147,6 +177,7 @@ async fn main() -> anyhow::Result<()> {
         config,
         current_mode.clone(),
         opt.blocked_udp_port,
+        attach_mode,
         tx.clone(),
     )
     .await?;
@@ -155,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
         .take_map("COUNTERS")
         .context("COUNTERS map not found")?
         .try_into()?;
-    spawn_stats_ticker(tx.clone(), counters, current_mode);
+    spawn_stats_ticker(tx.clone(), counters, current_mode, attach_mode);
 
     let ring_buf: RingBuf<_> = ebpf
         .take_map("EVENTS")
@@ -183,18 +214,43 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let Opt { iface, .. } = opt;
-    let program: &mut Xdp = ebpf.program_mut("xdp_hello").unwrap().try_into()?;
-    program.load()?;
-    program.attach(&iface, XdpFlags::default())
-        .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
-
     let ctrl_c = signal::ctrl_c();
     println!("Waiting for Ctrl-C...");
     ctrl_c.await?;
     println!("Exiting...");
 
     Ok(())
+}
+
+fn attach_xdp(
+    program: &mut Xdp,
+    iface: &str,
+    preference: XdpModePreference,
+) -> anyhow::Result<XdpAttachMode> {
+    match preference {
+        XdpModePreference::Native => {
+            program
+                .attach(iface, XdpFlags::DRV_MODE)
+                .with_context(|| format!("failed to attach XDP in native mode to {iface}"))?;
+            Ok(XdpAttachMode::Native)
+        }
+        XdpModePreference::Generic => {
+            program
+                .attach(iface, XdpFlags::SKB_MODE)
+                .with_context(|| format!("failed to attach XDP in generic mode to {iface}"))?;
+            Ok(XdpAttachMode::Generic)
+        }
+        XdpModePreference::Auto => match program.attach(iface, XdpFlags::DRV_MODE) {
+            Ok(_) => Ok(XdpAttachMode::Native),
+            Err(native_error) => {
+                warn!("native XDP attach failed ({native_error}); falling back to generic mode");
+                program
+                    .attach(iface, XdpFlags::SKB_MODE)
+                    .with_context(|| format!("failed to attach XDP in generic mode to {iface}"))?;
+                Ok(XdpAttachMode::Generic)
+            }
+        },
+    }
 }
 
 /// NDJSON を配信する TCP サーバを起動する。接続ごとにブロードキャストを購読し、
@@ -244,6 +300,7 @@ async fn spawn_control_server(
     config: Arc<Mutex<Array<aya::maps::MapData, u32>>>,
     current_mode: Arc<AtomicU32>,
     blocked_udp_port: u16,
+    attach_mode: XdpAttachMode,
     tx: broadcast::Sender<String>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(&listen)
@@ -291,6 +348,7 @@ async fn spawn_control_server(
                                 "type": "defense_mode",
                                 "mode": mode.as_str(),
                                 "blocked_udp_port": blocked_udp_port,
+                                "attach_mode": attach_mode.as_str(),
                             })
                             .to_string();
                             let _ = tx.send(event.clone());
@@ -298,6 +356,7 @@ async fn spawn_control_server(
                                 "ok": true,
                                 "mode": mode.as_str(),
                                 "blocked_udp_port": blocked_udp_port,
+                                "attach_mode": attach_mode.as_str(),
                             })
                             .to_string();
                             let _ = writer.write_all(response.as_bytes()).await;
@@ -327,10 +386,13 @@ fn spawn_stats_ticker(
     tx: broadcast::Sender<String>,
     counters: PerCpuArray<aya::maps::MapData, u64>,
     current_mode: Arc<AtomicU32>,
+    attach_mode: XdpAttachMode,
 ) {
     tokio::task::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(500));
         let mut previous_total = 0_u64;
+        let mut previous_pass = 0_u64;
+        let mut previous_drop = 0_u64;
 
         loop {
             interval.tick().await;
@@ -338,7 +400,11 @@ fn spawn_stats_ticker(
             let drop_count = sum_counter(&counters, COUNTER_DROP_INDEX);
             let total = pass.saturating_add(drop_count);
             let pps = total.saturating_sub(previous_total).saturating_mul(2);
+            let interval_pass = pass.saturating_sub(previous_pass);
+            let interval_drop = drop_count.saturating_sub(previous_drop);
             previous_total = total;
+            previous_pass = pass;
+            previous_drop = drop_count;
 
             let line = serde_json::json!({
                 "type": "stats",
@@ -347,6 +413,10 @@ fn spawn_stats_ticker(
                 "total": total,
                 "pass": pass,
                 "drop": drop_count,
+                "interval_pass": interval_pass,
+                "interval_drop": interval_drop,
+                "interval_ms": 500,
+                "attach_mode": attach_mode.as_str(),
             })
             .to_string();
             let _ = tx.send(line);

@@ -8,7 +8,7 @@ use aya_ebpf::{
     maps::{Array, HashMap, PerCpuArray, RingBuf},
     programs::XdpContext,
 };
-use aya_log_ebpf::{info, warn};
+use aya_log_ebpf::warn;
 use core::mem;
 use xdp_hello_common::{
     CONFIG_BLOCKED_UDP_PORT_INDEX, CONFIG_MODE_INDEX, COUNTER_DROP_INDEX, COUNTER_PASS_INDEX,
@@ -29,8 +29,6 @@ const IPV4_SRC_ADDR_OFFSET: usize = ETH_HDR_LEN + 12;
 const IPV4_DST_ADDR_OFFSET: usize = ETH_HDR_LEN + 16;
 const IPV4_MIN_HDR_LEN: usize = 20;
 const TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS: usize = ETH_HDR_LEN + IPV4_MIN_HDR_LEN;
-const TCP_DATA_OFFSET_OFFSET: usize = TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 12;
-const TCP_MIN_HDR_LEN: usize = 20;
 const PACKET_RATE_WINDOW_NS: u64 = 1_000_000_000;
 const PACKET_RATE_THRESHOLD: u32 = 100;
 
@@ -67,7 +65,6 @@ pub fn xdp_hello(ctx: XdpContext) -> u32 {
 fn try_xdp_hello(ctx: XdpContext) -> Result<u32, u32> {
     let eth_type = read_be_u16(&ctx, ETH_TYPE_OFFSET)?;
     if eth_type != ETH_P_IP {
-        info!(&ctx, "received non-IPv4 packet");
         return Ok(xdp_action::XDP_PASS);
     }
 
@@ -77,11 +74,9 @@ fn try_xdp_hello(ctx: XdpContext) -> Result<u32, u32> {
     let version = version_ihl >> 4;
     let ihl = version_ihl & 0x0f;
     if version != 4 || ihl < 5 {
-        info!(&ctx, "received malformed IPv4 packet");
         return Ok(xdp_action::XDP_PASS);
     }
     if ihl != 5 {
-        info!(&ctx, "received IPv4 packet with options");
         return Ok(xdp_action::XDP_PASS);
     }
 
@@ -92,8 +87,7 @@ fn try_xdp_hello(ctx: XdpContext) -> Result<u32, u32> {
     let transport_offset = TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS;
     match protocol {
         IPPROTO_ICMP => {
-            let icmp = ptr_at::<u8>(&ctx, transport_offset)?;
-            let icmp_type = unsafe { *icmp };
+            ptr_at::<u8>(&ctx, transport_offset)?;
             record_packet(
                 src_addr,
                 dst_addr,
@@ -102,25 +96,11 @@ fn try_xdp_hello(ctx: XdpContext) -> Result<u32, u32> {
                 IPPROTO_ICMP,
                 PACKET_ACTION_PASS,
             );
-            info!(
-                &ctx,
-                "received IPv4 ICMP packet: src={}.{}.{}.{}, dst={}.{}.{}.{}, type={}",
-                src_addr[0],
-                src_addr[1],
-                src_addr[2],
-                src_addr[3],
-                dst_addr[0],
-                dst_addr[1],
-                dst_addr[2],
-                dst_addr[3],
-                icmp_type
-            );
         }
         IPPROTO_TCP => {
             let ports = ptr_at::<[u8; 4]>(&ctx, transport_offset)? as *const u8;
             let src_port = read_be_u16_at(ports);
             let dst_port = read_be_u16_at(unsafe { ports.add(2) });
-            let tcp_data_offset = read_u8(&ctx, TCP_DATA_OFFSET_OFFSET)? >> 4;
             record_packet(
                 src_addr,
                 dst_addr,
@@ -129,28 +109,6 @@ fn try_xdp_hello(ctx: XdpContext) -> Result<u32, u32> {
                 IPPROTO_TCP,
                 PACKET_ACTION_PASS,
             );
-            info!(
-                &ctx,
-                "received IPv4 TCP packet: src={}.{}.{}.{}:{}, dst={}.{}.{}.{}:{}",
-                src_addr[0],
-                src_addr[1],
-                src_addr[2],
-                src_addr[3],
-                src_port,
-                dst_addr[0],
-                dst_addr[1],
-                dst_addr[2],
-                dst_addr[3],
-                dst_port
-            );
-            log_http_method(
-                &ctx,
-                src_addr,
-                dst_addr,
-                src_port,
-                dst_port,
-                tcp_data_offset,
-            );
         }
         IPPROTO_UDP => {
             let ports = ptr_at::<[u8; 4]>(&ctx, transport_offset)? as *const u8;
@@ -158,26 +116,11 @@ fn try_xdp_hello(ctx: XdpContext) -> Result<u32, u32> {
             let dst_port = read_be_u16_at(unsafe { ports.add(2) });
             let action = udp_action(dst_port);
             record_packet(src_addr, dst_addr, src_port, dst_port, IPPROTO_UDP, action);
-            info!(
-                &ctx,
-                "received IPv4 UDP packet: src={}.{}.{}.{}:{}, dst={}.{}.{}.{}:{}, action={}",
-                src_addr[0],
-                src_addr[1],
-                src_addr[2],
-                src_addr[3],
-                src_port,
-                dst_addr[0],
-                dst_addr[1],
-                dst_addr[2],
-                dst_addr[3],
-                dst_port,
-                action
-            );
             if action == PACKET_ACTION_DROP {
                 return Ok(xdp_action::XDP_DROP);
             }
         }
-        _ => info!(&ctx, "received IPv4 packet with other protocol"),
+        _ => {}
     }
 
     Ok(xdp_action::XDP_PASS)
@@ -227,72 +170,6 @@ fn read_be_u16_at(ptr: *const u8) -> u16 {
     let low = unsafe { *ptr.add(1) } as u16;
 
     (high << 8) | low
-}
-
-#[inline(always)]
-fn log_http_method(
-    ctx: &XdpContext,
-    src_addr: [u8; 4],
-    dst_addr: [u8; 4],
-    src_port: u16,
-    dst_port: u16,
-    tcp_data_offset: u8,
-) {
-    let payload_offset = match tcp_data_offset {
-        5 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + TCP_MIN_HDR_LEN,
-        6 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 24,
-        7 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 28,
-        8 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 32,
-        9 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 36,
-        10 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 40,
-        11 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 44,
-        12 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 48,
-        13 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 52,
-        14 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 56,
-        15 => TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS + 60,
-        _ => return,
-    };
-
-    let payload = match ptr_at::<[u8; 4]>(ctx, payload_offset) {
-        Ok(payload) => payload as *const u8,
-        Err(_) => return,
-    };
-    let b0 = unsafe { *payload };
-    let b1 = unsafe { *payload.add(1) };
-    let b2 = unsafe { *payload.add(2) };
-    let b3 = unsafe { *payload.add(3) };
-
-    if b0 == b'G' && b1 == b'E' && b2 == b'T' && b3 == b' ' {
-        info!(
-            ctx,
-            "detected HTTP GET: src={}.{}.{}.{}:{}, dst={}.{}.{}.{}:{}",
-            src_addr[0],
-            src_addr[1],
-            src_addr[2],
-            src_addr[3],
-            src_port,
-            dst_addr[0],
-            dst_addr[1],
-            dst_addr[2],
-            dst_addr[3],
-            dst_port
-        );
-    } else if b0 == b'P' && b1 == b'O' && b2 == b'S' && b3 == b'T' {
-        info!(
-            ctx,
-            "detected HTTP POST: src={}.{}.{}.{}:{}, dst={}.{}.{}.{}:{}",
-            src_addr[0],
-            src_addr[1],
-            src_addr[2],
-            src_addr[3],
-            src_port,
-            dst_addr[0],
-            dst_addr[1],
-            dst_addr[2],
-            dst_addr[3],
-            dst_port
-        );
-    }
 }
 
 #[inline(always)]
