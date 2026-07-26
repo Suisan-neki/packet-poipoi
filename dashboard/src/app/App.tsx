@@ -2,6 +2,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
   type CSSProperties,
 } from "react";
@@ -120,10 +121,10 @@ const EMPTY_BASELINE: HealthSnapshot = {
 };
 
 const PHASES = [
-  { short: "基準", label: "通常時を測る", code: "BASELINE" },
-  { short: "負荷", label: "負荷を重ねる", code: "LOAD" },
-  { short: "防御", label: "入口で分ける", code: "XDP" },
-  { short: "結果", label: "前後を比べる", code: "RESULT" },
+  { short: "送信", label: "HTTPを送る", code: "HTTP" },
+  { short: "追加", label: "UDPも送る", code: "UDP" },
+  { short: "判定", label: "XDPで選別", code: "XDP" },
+  { short: "証拠", label: "実測値を確認", code: "PROOF" },
 ] as const;
 
 function clampPhase(value: number): ExperimentPhase {
@@ -305,6 +306,7 @@ function LatencyTrace({ values }: { values: number[] }) {
       className="latency-trace"
       viewBox="0 0 100 38"
       preserveAspectRatio="none"
+      role="img"
       aria-label="直近のHTTP応答時間"
     >
       <line x1="0" y1="34" x2="100" y2="34" />
@@ -343,12 +345,10 @@ function JourneyMap({
   phase,
   harbor,
   baseline,
-  dropRatio,
 }: {
   phase: ExperimentPhase;
   harbor: HarborState;
   baseline: HealthSnapshot;
-  dropRatio: number;
 }) {
   const showLoad = phase >= 1;
   const defending = phase >= 2;
@@ -365,28 +365,32 @@ function JourneyMap({
         <span>LIVE PACKET PATH</span>
         <strong>
           {phase === 0
-            ? "HTTP応答を、比較の基準として記録"
-            : "役割の違う2種類の通信が、同じ入口へ向かう"}
+            ? "まず、HTTP :8080の経路を追う"
+            : phase === 1
+              ? "同じPi BのNICへ、UDP :4000も送る"
+              : phase === 2
+                ? "XDPがprotocolと宛先portを見て判定"
+                : "3つの実測値で、選別結果を確認"}
         </strong>
       </div>
 
       <div className="route route--http">
-        <div className="route-origin">
-          <small>Pi Aから確認</small>
-          <strong>HTTP</strong>
-          <em>TCP :8080</em>
+        <div className={`route-origin ${phase === 0 ? "is-focus" : ""}`}>
+          <small>Raspberry Pi A / 送信</small>
+          <strong>HTTP GET</strong>
+          <em>TCP → :8080</em>
         </div>
         <PacketTrack kind="http" count={4} />
-        <div className="route-gate route-gate--http">
-          <small>Pi B / NIC直後</small>
+        <div className={`route-gate route-gate--http ${phase === 2 ? "is-focus" : ""}`}>
+          <small>Raspberry Pi B / NIC直後</small>
           <strong>XDP</strong>
-          <em>{defending ? "PASS" : "観測"}</em>
+          <em>{defending ? "XDP_PASS" : "MONITOR / PASS"}</em>
         </div>
         <div className="route-after route-after--pass">
           <span>→</span>
         </div>
-        <div className="route-destination route-destination--service">
-          <small>守りたいサービス</small>
+        <div className={`route-destination route-destination--service ${phase === 3 ? "is-focus" : ""}`}>
+          <small>Pi B / アプリ</small>
           <strong>HTTP :8080</strong>
           <em>{displayedHealth.statusCode ?? "—"} / {displayedHealth.latencyMs || "—"} ms</em>
         </div>
@@ -396,16 +400,16 @@ function JourneyMap({
         className={`route route--load ${showLoad ? "is-visible" : ""}`}
         aria-hidden={!showLoad}
       >
-        <div className="route-origin">
-          <small>Pi Aから追加</small>
-          <strong>UDP負荷</strong>
+        <div className={`route-origin ${phase === 1 ? "is-focus" : ""}`}>
+          <small>Raspberry Pi A / 追加送信</small>
+          <strong>テストUDP</strong>
           <em>:{harbor.attackPort} / {formatCount(harbor.attackPps)} pps</em>
         </div>
         <PacketTrack kind="load" count={9} active={showLoad} />
-        <div className="route-gate route-gate--load">
-          <small>同じ入口</small>
+        <div className={`route-gate route-gate--load ${phase === 2 ? "is-focus" : ""}`}>
+          <small>HTTPと同じNIC</small>
           <strong>XDP</strong>
-          <em>{defending ? "DROP" : "観測"}</em>
+          <em>{defending ? "RULE MATCH" : "MONITOR / PASS"}</em>
         </div>
         <div
           className={`route-after ${
@@ -419,22 +423,22 @@ function JourneyMap({
             defending
               ? "route-destination--drop"
               : "route-destination--load"
-          }`}
+          } ${phase === 3 ? "is-focus" : ""}`}
         >
-          <small>{defending ? "アプリへ届く前に" : "防御前"}</small>
-          <strong>{defending ? "遮断" : "到着"}</strong>
+          <small>{defending ? "network stackへ入る前" : "MONITORモード"}</small>
+          <strong>{defending ? "XDP_DROP" : "XDP_PASS"}</strong>
           <em>
             {defending
-              ? `全観測packetの${dropRatio.toFixed(1)}%`
-              : "HTTP監視は継続"}
+              ? `${formatCount(harbor.dropped)} packets`
+              : "この段階ではまだ通す"}
           </em>
         </div>
       </div>
 
       <div className="map-legend" aria-label="通信の役割">
-        <span><i className="legend-mark legend-mark--http" />HTTP = 守れたかを測る</span>
+        <span><i className="legend-mark legend-mark--http" />HTTP :8080 = 通す通信</span>
         {showLoad && (
-          <span><i className="legend-mark legend-mark--load" />UDP = 意図的に加える負荷</span>
+          <span><i className="legend-mark legend-mark--load" />UDP :{harbor.attackPort} = 止める通信</span>
         )}
       </div>
     </div>
@@ -453,11 +457,18 @@ export default function App() {
     resultReady: false,
   });
   const [demoPhase, setDemoPhase] = useState<ExperimentPhase>(0);
-  const [autoplay, setAutoplay] = useState(true);
+  const [autoplay, setAutoplay] = useState(() =>
+    typeof window === "undefined"
+      ? true
+      : !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
   const [latencies, setLatencies] = useState<number[]>(
     demo ? [18, 17, 16, 15, 16, 14, 14] : [],
   );
   const [showDetails, setShowDetails] = useState(false);
+  const detailsButtonRef = useRef<HTMLButtonElement>(null);
+  const closeDetailsButtonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       id: 1,
@@ -474,14 +485,34 @@ export default function App() {
   const baseline = live.baseline;
   const displayMode: HarborMode =
     demo && phase < 2 ? "monitor" : harbor.mode;
-  const dropRatio =
-    harbor.total > 0 ? (harbor.dropped / harbor.total) * 100 : 0;
   const serviceMaintained =
     harbor.healthSuccess && harbor.statusCode === 200;
-  const latencyDelta =
-    baseline.recorded && harbor.latencyMs > 0
-      ? harbor.latencyMs - baseline.latencyMs
-      : null;
+  const phaseHeadline =
+    phase === 0
+      ? "まず、HTTPだけを送る。"
+      : phase === 1
+        ? "次に、同じPi BへUDPも送る。"
+        : phase === 2
+          ? "XDPが、2種類の通信を見分ける。"
+          : serviceMaintained
+            ? "UDPは止まり、HTTPは届いた。"
+            : "HTTPの到達を確認できない。";
+  const phaseDescription =
+    phase === 0
+      ? "Pi AからPi BのHTTP :8080へGETを送ります。この通信は、最後まで通したい側です。"
+      : phase === 1
+        ? `HTTPを送り続けたまま、テスト用UDP :${harbor.attackPort}を同じNICへ追加します。UDPとHTTPの性能比較ではありません。`
+        : phase === 2
+          ? `ルールは1つです。UDPかつ宛先portが${harbor.attackPort}ならDROP。それ以外はPASSします。`
+          : "UDP送信量、XDP_DROP、実HTTP GETの3つを別々の取得元から確認します。";
+  const phaseFocus =
+    phase === 0
+      ? "HTTPの送信元"
+      : phase === 1
+        ? "同じNICへ追加するUDP"
+        : phase === 2
+          ? "NIC直後のXDP"
+          : "送信・判定・到達の実測値";
 
   function addLog(message: string, tone: LogEntry["tone"] = "quiet") {
     setLogs(current =>
@@ -501,6 +532,18 @@ export default function App() {
     if (!demo) return;
     setDemoPhase(clampPhase(next));
     if (pause) setAutoplay(false);
+  }
+
+  function openDetails() {
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : detailsButtonRef.current;
+    setShowDetails(true);
+  }
+
+  function closeDetails() {
+    setShowDetails(false);
   }
 
   useEffect(() => {
@@ -592,16 +635,51 @@ export default function App() {
   }, [demo, live.phase, live.resultReady]);
 
   useEffect(() => {
+    if (showDetails) {
+      closeDetailsButtonRef.current?.focus();
+      return;
+    }
+
+    previousFocusRef.current?.focus();
+  }, [showDetails]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setShowDetails(false);
+        closeDetails();
         return;
       }
+
+      if (showDetails) {
+        if (event.key === "Tab") {
+          event.preventDefault();
+          closeDetailsButtonRef.current?.focus();
+        }
+        return;
+      }
+
+      const target = event.target;
+      const isInteractive =
+        target instanceof HTMLElement &&
+        Boolean(
+          target.closest(
+            "button, a, input, select, textarea, [contenteditable='true']",
+          ),
+        );
+      if (
+        isInteractive ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey
+      ) {
+        return;
+      }
+
       if (event.key.toLowerCase() === "d") {
-        setShowDetails(current => !current);
+        openDetails();
         return;
       }
-      if (!demo || showDetails) return;
+      if (!demo) return;
       if (event.key === "ArrowRight") {
         chooseDemoPhase(phase + 1);
       }
@@ -640,7 +718,7 @@ export default function App() {
             <small>EVENT STREAM</small>
             <strong>{streamStatus.toUpperCase()}</strong>
           </div>
-          <button type="button" onClick={() => setShowDetails(true)}>
+          <button ref={detailsButtonRef} type="button" onClick={openDetails}>
             技術詳細 <kbd>D</kbd>
           </button>
         </div>
@@ -651,15 +729,15 @@ export default function App() {
           <div>
             <span>この実験で確かめること</span>
             <h1>
-              同じ入口へテスト負荷を流しても、
-              <strong>HTTPサービスを守れるか。</strong>
+              同じNICへ届く2種類の通信を、
+              <strong>アプリの手前で選別できるか。</strong>
             </h1>
           </div>
-          <p>
-            {demo
-              ? "公開ページでは、実機で得られる値のサンプルを順に再生します。"
-              : "表示値は、2台のRaspberry PiとXDPから届いた実測値です。"}
-          </p>
+          <div className="question-rule" aria-label="この実験の選別ルール">
+            <small>今回のルール</small>
+            <strong><i className="rule-mark rule-mark--pass" />HTTP :8080 は通す</strong>
+            <strong><i className="rule-mark rule-mark--drop" />UDP :{harbor.attackPort} は止める</strong>
+          </div>
         </section>
 
         <ol className="phase-strip" aria-label="実験の進行">
@@ -689,144 +767,56 @@ export default function App() {
           ))}
         </ol>
 
-        <section className={`stage stage--${phase + 1}`} aria-live="polite">
-          <div className="stage-copy">
-            <span className="stage-code">
-              STEP 0{phase + 1} / {PHASES[phase].code}
+        <section className={`stage stage--${phase + 1}`}>
+          <header className="stage-heading">
+            <div className="stage-heading__index">
+              <span className="stage-code">
+                STEP 0{phase + 1} / {PHASES[phase].code}
+              </span>
+              <small>いま見る場所</small>
+              <strong>{phaseFocus}</strong>
+            </div>
+            <div className="stage-heading__copy">
+              <h2>{phaseHeadline}</h2>
+              <p>{phaseDescription}</p>
+            </div>
+            <span className="sr-only" aria-live="polite">
+              {PHASES[phase].label}: {phaseHeadline}
             </span>
-
-            {phase === 0 && (
-              <>
-                <h2>負荷を加える前の、<br />HTTP応答を記録する。</h2>
-                <p>
-                  Pi AからPi BのHTTPサービスへGETを送ります。
-                  この値が、あとで負荷中の応答と比べる基準です。
-                </p>
-                <div className="focus-callout focus-callout--http">
-                  <small>ここで見る値</small>
-                  <strong>{baseline.statusCode ?? harbor.statusCode ?? "—"}</strong>
-                  <span>{baseline.latencyMs || harbor.latencyMs || "—"} ms</span>
-                  <em>通常時のHTTP GET</em>
-                </div>
-              </>
-            )}
-
-            {phase === 1 && (
-              <>
-                <h2>HTTPを測り続けたまま、<br />UDP負荷を重ねる。</h2>
-                <p>
-                  UDPとHTTPの性能比較ではありません。
-                  UDPは意図的に加える負荷、HTTPはサービスが動いているかを見る測定役です。
-                </p>
-                <div className="focus-callout focus-callout--load">
-                  <small>新しく加えた条件</small>
-                  <strong>{formatCount(harbor.attackPps)}</strong>
-                  <span>pps</span>
-                  <em>UDP :{harbor.attackPort}</em>
-                </div>
-              </>
-            )}
-
-            {phase === 2 && (
-              <>
-                <h2>同じ入口で、<br />XDPが通信を選別する。</h2>
-                <p>
-                  指定したUDPだけを、network stackやアプリへ届く前に破棄。
-                  HTTPは遮断対象ではないため、そのまま通過します。
-                </p>
-                <div className="focus-callout focus-callout--drop">
-                  <small>カーネルでの処理</small>
-                  <strong>{formatCount(harbor.dropped)}</strong>
-                  <span>packets</span>
-                  <em>XDP_DROP / per-CPU map</em>
-                </div>
-              </>
-            )}
-
-            {phase === 3 && (
-              <>
-                <h2>
-                  {serviceMaintained
-                    ? "負荷中も、同じHTTPが応答した。"
-                    : "負荷中のHTTP応答を確認できない。"}
-                </h2>
-                <p>
-                  通常時と負荷中で、同じURLのstatusとレイテンシを比較します。
-                  防御の成否は、UDPを止めた数だけでは決めません。
-                </p>
-                <div
-                  className={`verdict ${
-                    serviceMaintained ? "verdict--success" : "verdict--failure"
-                  }`}
-                >
-                  <small>実験結果</small>
-                  <strong>
-                    {serviceMaintained ? "HTTP応答を維持" : "HTTP応答なし"}
-                  </strong>
-                  <span>
-                    {harbor.statusCode ?? "—"} / {harbor.latencyMs || "—"} ms
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
+          </header>
 
           <div className="stage-visual">
-            {phase < 3 ? (
-              <JourneyMap
-                phase={phase}
-                harbor={harbor}
-                baseline={baseline}
-                dropRatio={dropRatio}
-              />
-            ) : (
-              <div className="result-board">
-                <div className="comparison-title">
-                  <span>SAME HTTP ENDPOINT</span>
-                  <strong>負荷の前後で、同じものを測る</strong>
-                </div>
+            <JourneyMap
+              phase={phase}
+              harbor={harbor}
+              baseline={baseline}
+            />
+          </div>
 
-                <div className="comparison">
-                  <article>
-                    <span>BEFORE / 通常時</span>
-                    <strong>{baseline.statusCode ?? "—"}</strong>
-                    <em>{baseline.latencyMs || "—"} ms</em>
-                    <small>HTTP GET :8080</small>
-                  </article>
-                  <div className="comparison-arrow">→</div>
-                  <article className={serviceMaintained ? "is-success" : "is-failure"}>
-                    <span>DURING LOAD / 負荷中</span>
-                    <strong>{harbor.statusCode ?? "—"}</strong>
-                    <em>{harbor.latencyMs || "—"} ms</em>
-                    <small>
-                      {latencyDelta == null
-                        ? "差分を計測中"
-                        : `通常時との差 ${latencyDelta >= 0 ? "+" : ""}${latencyDelta} ms`}
-                    </small>
-                  </article>
-                </div>
-
-                <div className="causal-proof" aria-label="結果を支える実測値">
-                  <div>
-                    <small>加えた負荷</small>
-                    <strong>{formatCount(harbor.attackPps)} <em>pps</em></strong>
-                    <span>traffic-node</span>
-                  </div>
-                  <b>→</b>
-                  <div>
-                    <small>入口で破棄</small>
-                    <strong>{dropRatio.toFixed(1)}<em>%</em></strong>
-                    <span>XDP_DROP / 全観測packet比</span>
-                  </div>
-                  <b>→</b>
-                  <div className="causal-proof__result">
-                    <small>サービスの応答</small>
-                    <strong>{harbor.statusCode ?? "—"} <em>/ {harbor.latencyMs || "—"}ms</em></strong>
-                    <span>実HTTP GET</span>
-                  </div>
-                </div>
-              </div>
-            )}
+          <div className="stage-evidence" aria-label="この段階の観測値">
+            <div className={phase === 0 ? "is-current" : ""}>
+              <small>1 / HTTPを送信</small>
+              <strong>GET :8080</strong>
+              <span>{baseline.statusCode ?? harbor.statusCode ?? "—"} / {baseline.latencyMs || harbor.latencyMs || "—"} ms</span>
+            </div>
+            <b>→</b>
+            <div className={phase === 1 ? "is-current" : ""}>
+              <small>2 / UDPも送信</small>
+              <strong>{phase >= 1 ? `${formatCount(harbor.attackPps)} pps` : "待機中"}</strong>
+              <span>UDP :{harbor.attackPort}</span>
+            </div>
+            <b>→</b>
+            <div className={phase === 2 ? "is-current" : ""}>
+              <small>3 / XDPで判定</small>
+              <strong>{phase >= 2 ? "XDP_DROP" : "MONITOR"}</strong>
+              <span>{phase >= 2 ? `${formatCount(harbor.dropped)} packets` : "まだ遮断しない"}</span>
+            </div>
+            <b>→</b>
+            <div className={`${phase === 3 ? "is-current" : ""} ${serviceMaintained ? "is-success" : ""}`}>
+              <small>4 / HTTPの到達</small>
+              <strong>{phase === 3 ? harbor.statusCode ?? "—" : "確認中"}</strong>
+              <span>{phase === 3 ? `${harbor.latencyMs || "—"} ms / 実HTTP GET` : "最後に確認"}</span>
+            </div>
           </div>
         </section>
 
@@ -870,7 +860,7 @@ export default function App() {
         <div
           className="details-backdrop"
           role="presentation"
-          onMouseDown={() => setShowDetails(false)}
+          onMouseDown={closeDetails}
         >
           <section
             className="details-panel"
@@ -884,7 +874,11 @@ export default function App() {
                 <span>TECHNICAL DETAILS</span>
                 <h2 id="details-title">画面の結論を、どこから得ているか</h2>
               </div>
-              <button type="button" onClick={() => setShowDetails(false)}>
+              <button
+                ref={closeDetailsButtonRef}
+                type="button"
+                onClick={closeDetails}
+              >
                 閉じる <kbd>Esc</kbd>
               </button>
             </header>
@@ -894,18 +888,18 @@ export default function App() {
                 <span>構成</span>
                 <h3>Raspberry Pi 2台</h3>
                 <p>
-                  Pi Aの<code>traffic-node</code>がPi BへUDP負荷を送りながら、
-                  同じPi B上のHTTP :8080へGETを続けます。
+                  Pi Aの<code>traffic-node</code>が、Pi B上のHTTP :8080へ
+                  GETを続けながら、同じNICへテストUDPを送ります。
                 </p>
               </article>
               <article>
                 <span>役割</span>
-                <h3>条件と結果を分ける</h3>
+                <h3>通す通信と止める通信</h3>
                 <dl>
-                  <div><dt>実験条件</dt><dd>UDP :{harbor.attackPort}</dd></div>
-                  <div><dt>結果指標</dt><dd>HTTP :8080</dd></div>
+                  <div><dt>XDP_PASS</dt><dd>HTTP :8080</dd></div>
+                  <div><dt>XDP_DROP</dt><dd>UDP :{harbor.attackPort}</dd></div>
                 </dl>
-                <p>UDP一般を危険な通信として扱っているわけではありません。</p>
+                <p>UDP一般ではなく、宛先portが一致したテスト通信だけを止めます。</p>
               </article>
               <article>
                 <span>遮断位置</span>
@@ -932,7 +926,8 @@ export default function App() {
                 <span>サービス確認</span>
                 <h3>1秒ごとの実HTTP GET</h3>
                 <p>
-                  status codeとレイテンシを通常時・負荷中で同じ方法により測定します。
+                  status codeとレイテンシを1秒ごとに測定し、
+                  XDP選別中もHTTPがPi Bへ届くことを確認します。
                 </p>
                 <LatencyTrace values={latencies} />
               </article>
