@@ -65,6 +65,8 @@ Packet Journeyの主役はanimationではなく比較実験です。
 
 ## 実機で動かす
 
+Step 1〜3はforeground processです。**それぞれ別terminalまたはserviceとして起動したまま**にし、3つが動作してからStep 4のrunnerを実行してください。
+
 ### 1. Pi B: observation-hub
 
 ```bash

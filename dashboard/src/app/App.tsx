@@ -440,9 +440,13 @@ function CompareStage({
   summaries: ConditionSummary[];
   prediction: DropPoint | null;
 }) {
-  const bestCpu = Math.min(...summaries.map(item => item.cpuPercent));
+  const completedSummaries = summaries.filter(summary => summary.repetitions > 0);
+  const hasCompletedRun = completedSummaries.length > 0;
+  const bestCpu = Math.min(...completedSummaries.map(item => item.cpuPercent));
   const measuredBest =
-    summaries.find(summary => summary.cpuPercent === bestCpu)?.dropPoint ?? null;
+    (hasCompletedRun
+      ? summaries.find(summary => summary.cpuPercent === bestCpu)?.dropPoint
+      : null) ?? null;
   return (
     <div className="compare-stage">
       <section className="compare-heading">
@@ -467,7 +471,7 @@ function CompareStage({
         {summaries.map((summary, index) => (
           <div
             className={`comparison-row comparison-row--${summary.dropPoint} ${
-              summary.cpuPercent === bestCpu ? "is-best" : ""
+              hasCompletedRun && summary.cpuPercent === bestCpu ? "is-best" : ""
             }`}
             role="row"
             key={summary.dropPoint}
@@ -540,6 +544,7 @@ export default function App() {
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const manualPhaseRef = useRef(false);
 
   const summaries = useMemo(() => summarizeRuns(runs), [runs]);
   const activeDropPoint = PHASES[phase].dropPoint;
@@ -549,11 +554,13 @@ export default function App() {
   const representative = runs.at(-1);
 
   function choosePhase(next: number) {
+    manualPhaseRef.current = true;
     setPhase(clampPhase(next));
     if (demo) setAutoplay(false);
   }
 
   function choosePrediction(dropPoint: DropPoint) {
+    manualPhaseRef.current = false;
     setPrediction(dropPoint);
     setShowPrediction(false);
     setPhase(0);
@@ -604,13 +611,15 @@ export default function App() {
             );
             return [...sameExperiment.filter(item => item.run_id !== run.run_id), run];
           });
-          const nextPhase =
-            run.drop_point === "application"
-              ? 0
-              : run.drop_point === "netfilter"
-                ? 1
-                : 2;
-          setPhase(nextPhase);
+          if (!manualPhaseRef.current) {
+            const nextPhase =
+              run.drop_point === "application"
+                ? 0
+                : run.drop_point === "netfilter"
+                  ? 1
+                  : 2;
+            setPhase(nextPhase);
+          }
         }
       },
     }).then(subscription => {
@@ -661,7 +670,10 @@ export default function App() {
       }
       if (event.key === "ArrowRight") choosePhase(phase + 1);
       if (event.key === "ArrowLeft") choosePhase(phase - 1);
-      if (event.key === " ") {
+      const target = event.target as HTMLElement | null;
+      const isInteractive =
+        target?.closest("button, a, input, select, textarea") != null;
+      if (event.key === " " && !isInteractive) {
         event.preventDefault();
         setAutoplay(current => !current);
       }
@@ -671,8 +683,8 @@ export default function App() {
   }, [phase, showDetails]);
 
   useEffect(() => {
-    if (demo || phase === 3) return;
-    const hasEveryCondition = summaries.every(item => item.repetitions > 0);
+    if (demo || phase === 3 || manualPhaseRef.current) return;
+    const hasEveryCondition = summaries.every(item => item.repetitions >= 3);
     if (hasEveryCondition) setPhase(3);
   }, [demo, phase, summaries]);
 
@@ -793,6 +805,7 @@ export default function App() {
               type="button"
               className="prediction-reset"
               onClick={() => {
+                manualPhaseRef.current = false;
                 setPhase(0);
                 setPrediction(null);
                 setShowPrediction(true);

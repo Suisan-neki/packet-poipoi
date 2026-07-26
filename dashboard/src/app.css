@@ -3,7 +3,7 @@
   background: #e9e4d8;
   font-family: Inter, "Noto Sans JP", "Yu Gothic", sans-serif;
   font-synthesis: none;
-  text-rendering: optimizeLegibility;
+  text-rendering: optimizelegibility;
   --navy: #0b2637;
   --paper: #f3f0e8;
   --ground: #e9e4d8;
@@ -13,8 +13,8 @@
   --sand: #c3a16a;
   --rust: #a35f50;
   --ink-soft: #5e7277;
-  --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-  --serif: "Yu Mincho", "Hiragino Mincho ProN", Georgia, serif;
+  --mono: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+  --serif: "Yu Mincho", "Hiragino Mincho ProN", "Georgia", serif;
 }
 
 * {
@@ -220,7 +220,7 @@ kbd {
 .experiment-question h1 {
   margin: 4px 0 0;
   font: 500 clamp(1.2rem, 1.9vw, 2rem) / 1.22 var(--serif);
-  white-space: nowrap;
+  text-wrap: balance;
 }
 
 .experiment-question h1 strong {

@@ -1,12 +1,14 @@
 use anyhow::Context as _;
 use clap::Parser;
 use serde_json::json;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::time::{Instant, MissedTickBehavior, timeout};
+
+const ATTACK_PAYLOAD_BYTES: usize = 128;
 
 #[derive(Debug, Clone, Parser)]
 struct Opt {
@@ -35,7 +37,7 @@ struct Opt {
     #[arg(long, default_value = "127.0.0.1:9020")]
     defense_control: String,
     /// experiment-runnerから負荷を開始・停止する制御API。
-    #[arg(long, default_value = "0.0.0.0:9030")]
+    #[arg(long, default_value = "127.0.0.1:9030")]
     control_listen: String,
 }
 
@@ -128,16 +130,16 @@ async fn spawn_control_server(
                         })
                         .unwrap_or_else(|| line.trim().to_ascii_lowercase());
 
-                    let active = match command.as_str() {
+                    let (active, state_changed) = match command.as_str() {
                         "start" | "attack" => {
                             attack_active.store(true, Ordering::Relaxed);
-                            true
+                            (true, true)
                         }
                         "stop" => {
                             attack_active.store(false, Ordering::Relaxed);
-                            false
+                            (false, true)
                         }
-                        "status" => attack_active.load(Ordering::Relaxed),
+                        "status" => (attack_active.load(Ordering::Relaxed), false),
                         _ => {
                             let response = json!({
                                 "ok": false,
@@ -150,13 +152,15 @@ async fn spawn_control_server(
                     };
 
                     let total = packets_sent.load(Ordering::Relaxed);
-                    publish_attack_state(&opt, active, total, 0).await;
+                    if state_changed {
+                        publish_attack_state(&opt, active, total, 0).await;
+                    }
                     let response = json!({
                         "ok": true,
                         "active": active,
                         "packets_sent": total,
                         "target_pps": opt.attack_pps,
-                        "payload_bytes": 128,
+                        "payload_bytes": ATTACK_PAYLOAD_BYTES,
                     });
                     let _ = writer.write_all(response.to_string().as_bytes()).await;
                     let _ = writer.write_all(b"\n").await;
@@ -218,7 +222,7 @@ async fn spawn_attack_worker(
         send_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut report_interval = tokio::time::interval(Duration::from_secs(1));
         report_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        let payload = [0x50_u8; 128];
+        let payload = [0x50_u8; ATTACK_PAYLOAD_BYTES];
         let mut previous_total = 0_u64;
 
         loop {

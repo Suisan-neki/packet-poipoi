@@ -1,11 +1,14 @@
 use anyhow::{bail, Context as _};
 use clap::Parser;
-use observation_core::{DropPoint, ExperimentEnvironment, ExperimentRun, XdpAttachMode};
+use observation_core::{
+    DropPoint, ExperimentEnvironment, ExperimentRun, StreamEvent, XdpAttachMode,
+};
 use serde_json::{json, Value};
 use std::fs;
+use std::io::ErrorKind;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -13,6 +16,8 @@ use tokio::net::{TcpStream, UdpSocket};
 
 const NFT_FAMILY: &str = "inet";
 const NFT_TABLE: &str = "packet_journey";
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(3);
+const UDP_DRAIN_TIME: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -62,10 +67,14 @@ struct NftGuard;
 
 impl NftGuard {
     fn disable() -> anyhow::Result<()> {
-        let output = Command::new("nft")
+        let output = match Command::new("nft")
             .args(["delete", "table", NFT_FAMILY, NFT_TABLE])
             .output()
-            .context("nft command is required for the netfilter condition")?;
+        {
+            Ok(output) => output,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error).context("failed to execute nft cleanup"),
+        };
         if output.status.success() || stderr_says_missing(&output.stderr) {
             return Ok(());
         }
@@ -97,7 +106,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let received = Arc::new(AtomicU64::new(0));
-    spawn_udp_sink(&opt.udp_listen, received.clone()).await?;
+    let sink_failed = Arc::new(AtomicBool::new(false));
+    spawn_udp_sink(&opt.udp_listen, received.clone(), sink_failed.clone()).await?;
     let _nft_guard = NftGuard;
     let environment = read_experiment_environment(&opt.interface);
     let experiment_id = format!(
@@ -114,35 +124,53 @@ async fn main() -> anyhow::Result<()> {
         opt.duration_secs, opt.repetitions
     );
 
-    for repetition in 1..=opt.repetitions {
-        for drop_point in condition_order(repetition) {
-            let run = run_condition(
-                &opt,
-                &experiment_id,
-                repetition,
-                drop_point,
-                &received,
-                &environment,
-            )
-            .await?;
-            run.validate()
-                .map_err(|error| anyhow::anyhow!("invalid experiment result: {error:?}"))?;
-            publish_run(&opt.hub, &run).await?;
-            println!(
-                "{} r{}: sent={} app={} cpu={:.1}% NET_RX={}",
-                drop_point.as_str(),
-                repetition,
-                run.packets_sent,
-                run.packets_received_by_app,
-                run.cpu_busy_percent,
-                run.net_rx_softirq_delta
-            );
+    let experiment_result: anyhow::Result<()> = async {
+        for repetition in 1..=opt.repetitions {
+            for drop_point in condition_order(repetition) {
+                let run = run_condition(
+                    &opt,
+                    &experiment_id,
+                    repetition,
+                    drop_point,
+                    &received,
+                    &sink_failed,
+                    &environment,
+                )
+                .await?;
+                run.validate()
+                    .map_err(|error| anyhow::anyhow!("invalid experiment result: {error:?}"))?;
+                publish_run(&opt.hub, &run).await?;
+                println!(
+                    "{} r{}: sent={} app={} cpu={:.1}% NET_RX={}",
+                    drop_point.as_str(),
+                    repetition,
+                    run.packets_sent,
+                    run.packets_received_by_app,
+                    run.cpu_busy_percent,
+                    run.net_rx_softirq_delta
+                );
+            }
         }
+        Ok(())
     }
+    .await;
 
-    NftGuard::disable()?;
-    let _ = set_xdp_mode(&opt.xdp_control, "monitor").await;
-    let _ = traffic_command(&opt.traffic_control, "stop").await;
+    let nft_cleanup = NftGuard::disable();
+    let xdp_cleanup = set_xdp_mode(&opt.xdp_control, "monitor").await;
+    let traffic_cleanup = traffic_command(&opt.traffic_control, "stop").await;
+    if let Err(error) = &nft_cleanup {
+        eprintln!("nft cleanup failed: {error}");
+    }
+    if let Err(error) = &xdp_cleanup {
+        eprintln!("XDP cleanup failed: {error}");
+    }
+    if let Err(error) = &traffic_cleanup {
+        eprintln!("traffic cleanup failed: {error}");
+    }
+    experiment_result?;
+    nft_cleanup?;
+    xdp_cleanup.context("failed to restore XDP monitor mode")?;
+    traffic_cleanup.context("failed to stop traffic generator")?;
     println!("completed: {experiment_id}");
     Ok(())
 }
@@ -160,8 +188,12 @@ async fn run_condition(
     repetition: u16,
     drop_point: DropPoint,
     received: &AtomicU64,
+    sink_failed: &AtomicBool,
     environment: &ExperimentEnvironment,
 ) -> anyhow::Result<ExperimentRun> {
+    if sink_failed.load(Ordering::Relaxed) {
+        bail!("userspace UDP sink is not running");
+    }
     let attach_mode = configure_drop_point(opt, drop_point).await?;
     tokio::time::sleep(Duration::from_secs(opt.settle_secs)).await;
 
@@ -176,6 +208,10 @@ async fn run_condition(
 
     let cpu_after = read_cpu_snapshot()?;
     let softirq_after = read_net_rx_softirq()?;
+    tokio::time::sleep(UDP_DRAIN_TIME).await;
+    if sink_failed.load(Ordering::Relaxed) {
+        bail!("userspace UDP sink failed during the experiment");
+    }
     let app_after = received.load(Ordering::Relaxed);
     let run_id = format!(
         "{experiment_id}-{}-r{repetition}",
@@ -245,7 +281,11 @@ async fn configure_drop_point(opt: &Opt, drop_point: DropPoint) -> anyhow::Resul
     }
 }
 
-async fn spawn_udp_sink(listen: &str, received: Arc<AtomicU64>) -> anyhow::Result<()> {
+async fn spawn_udp_sink(
+    listen: &str,
+    received: Arc<AtomicU64>,
+    failed: Arc<AtomicBool>,
+) -> anyhow::Result<()> {
     let socket = UdpSocket::bind(listen)
         .await
         .with_context(|| format!("failed to bind userspace UDP sink on {listen}"))?;
@@ -257,8 +297,15 @@ async fn spawn_udp_sink(listen: &str, received: Arc<AtomicU64>) -> anyhow::Resul
                 Ok(_) => {
                     received.fetch_add(1, Ordering::Relaxed);
                 }
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) =>
+                {
+                    eprintln!("transient UDP sink receive error: {error}");
+                    continue;
+                }
                 Err(error) => {
                     eprintln!("UDP sink receive failed: {error}");
+                    failed.store(true, Ordering::Relaxed);
                     break;
                 }
             }
@@ -296,28 +343,34 @@ async fn set_xdp_mode(target: &str, mode: &str) -> anyhow::Result<XdpAttachMode>
 }
 
 async fn request_json(target: &str, request: Value) -> anyhow::Result<Value> {
-    let mut stream = TcpStream::connect(target)
+    let operation = async {
+        let mut stream = TcpStream::connect(target)
+            .await
+            .with_context(|| format!("failed to connect to {target}"))?;
+        stream.write_all(request.to_string().as_bytes()).await?;
+        stream.write_all(b"\n").await?;
+        let mut response = String::new();
+        BufReader::new(stream).read_line(&mut response).await?;
+        serde_json::from_str(response.trim()).context("control API returned invalid JSON")
+    };
+    tokio::time::timeout(CONTROL_TIMEOUT, operation)
         .await
-        .with_context(|| format!("failed to connect to {target}"))?;
-    stream.write_all(request.to_string().as_bytes()).await?;
-    stream.write_all(b"\n").await?;
-    let mut response = String::new();
-    BufReader::new(stream).read_line(&mut response).await?;
-    serde_json::from_str(response.trim()).context("control API returned invalid JSON")
+        .with_context(|| format!("control API timed out after 3s: {target}"))?
 }
 
 async fn publish_run(target: &str, run: &ExperimentRun) -> anyhow::Result<()> {
-    let mut value = serde_json::to_value(run)?;
-    value
-        .as_object_mut()
-        .context("ExperimentRun must serialize as an object")?
-        .insert("type".to_string(), Value::String("experiment_run".to_string()));
-    let mut stream = TcpStream::connect(target)
+    let line = StreamEvent::ExperimentRun(run.clone()).to_json_line();
+    let operation = async {
+        let mut stream = TcpStream::connect(target)
+            .await
+            .with_context(|| format!("failed to connect to observation hub {target}"))?;
+        stream.write_all(line.as_bytes()).await?;
+        stream.write_all(b"\n").await?;
+        Ok(())
+    };
+    tokio::time::timeout(CONTROL_TIMEOUT, operation)
         .await
-        .with_context(|| format!("failed to connect to observation hub {target}"))?;
-    stream.write_all(value.to_string().as_bytes()).await?;
-    stream.write_all(b"\n").await?;
-    Ok(())
+        .with_context(|| format!("observation hub timed out after 3s: {target}"))?
 }
 
 fn read_cpu_snapshot() -> anyhow::Result<CpuSnapshot> {
@@ -338,7 +391,8 @@ fn parse_cpu_snapshot(stat: &str) -> Option<CpuSnapshot> {
         return None;
     }
     Some(CpuSnapshot {
-        total: fields.iter().copied().sum(),
+        // /proc/statのguestとguest_niceはuser/niceへ既に含まれるため二重加算しない。
+        total: fields.iter().take(8).copied().sum(),
         idle: fields[3].saturating_add(fields[4]),
     })
 }
@@ -404,7 +458,8 @@ mod tests {
 
     #[test]
     fn parses_linux_cpu_counters() {
-        let snapshot = parse_cpu_snapshot("cpu  10 2 3 40 5 0 0 0 0 0\ncpu0 1 1 1 1").unwrap();
+        let snapshot =
+            parse_cpu_snapshot("cpu  10 2 3 40 5 0 0 0 100 50\ncpu0 1 1 1 1").unwrap();
         assert_eq!(snapshot.total, 60);
         assert_eq!(snapshot.idle, 45);
     }
