@@ -29,7 +29,7 @@ Web buildはUI fixtureを再生します。badgeとfooterでfixtureであるこ�
 npm run tauri dev
 ```
 
-Tauri版は`127.0.0.1:9010`のNDJSON streamを購読します。`experiment_run`が3条件分そろうと比較画面へ進みます。
+Tauri版は`127.0.0.1:9010`のNDJSON streamを購読します。各条件3回分の`experiment_run`がそろうと比較画面へ進みます。
 
 ## Port
 

@@ -1,73 +1,105 @@
-# PACKET JOURNEY
+# Packet Journey
 
-**同じpacketを、どこで捨てるか。**
+同じUDP負荷を **Application / nftables / XDP** の3か所で止め、Raspberry Piの受信処理がどう変わるかを比べる実験です。
 
-Packet Journeyは、2台のRaspberry PiでLinuxの受信処理を実測する低レイヤ実験です。
+[Webデモを見る](https://suisan-neki.github.io/packet-journey/)
 
-Pi AからPi Bへ同じUDP負荷を送り、破棄する位置だけを変えます。
+> Webデモの数値は、画面の流れを確認するためのサンプルです。実測結果ではありません。
 
-1. **Application** — UDP socketまで届け、userspaceで読み捨てる
-2. **nftables** — Linux network stack内で捨てる
-3. **XDP** — driver entryで、network stackへ入る前に捨てる
+## 何を比べるのか
 
-各条件でCPU busy率、NET_RX softirq、userspace到達数を測定します。HTTPは比較対象ではありません。負荷中もPi B上のサービスが応答するかを確認するcanaryです。
-
-**Web demo:** https://suisan-neki.github.io/packet-journey/
-
-公開版は画面の読み方を確認するUI fixtureです。ベンチマーク値ではありません。Tauri版は`experiment-runner`が出した実測イベントだけを表示します。
-
-## 30秒で分かる実験
+Pi AからPi Bへ、同じ条件のUDPパケットを送ります。変えるのは、Pi Bがパケットを止める位置だけです。
 
 ```text
-Pi A                                  Raspberry Pi B
-traffic-node                          eth0
-  UDP :4000 / 2,000 pps ──────────────┬─ XDP ─ network stack ─ nftables ─ UDP socket
-  HTTP GET :8080 ──────────────────────┘
-                                       ↑       ↑                 ↑
-                                    XDP DROP   nft DROP       app receive
+Raspberry Pi A                         Raspberry Pi B
+
+UDP :4000 ─────────> NIC ──> XDP ──> network stack ──> nftables ──> UDP socket
+                      │       │                              │             │
+                   LANの入口   └─ XDP条件                     │             └─ Application条件
+                                                         └─ nftables条件
 ```
 
-変えるのは停止位置だけです。送信レート、payload、計測時間を固定し、各条件を3回ずつ実行します。熱や実行順の偏りを減らすため、反復ごとに条件の開始位置を回します。
+- **NIC**: 有線LANからパケットを受け取る装置
+- **XDP**: Linuxの通常のネットワーク処理へ渡す前に動くeBPF hook
+- **nftables**: Linux内のfirewall
+- **Application**: UDP socketからパケットを読むuserspace process
 
-| 測るもの | 取得元 | 表示 |
+比較する3条件は次のとおりです。
+
+| 条件 | パケットを止める場所 | その手前の動作 |
 | --- | --- | --- |
-| CPU busy | Pi Bの`/proc/stat`差分 | 3回の中央値 |
-| network受信処理 | Pi Bの`/proc/softirqs`にある`NET_RX`差分 | 1万packetあたり |
-| userspace到達 | runnerのUDP socket実受信数 | 送信数に対する割合 |
-| XDP実行条件 | 実際にattachできたmode | native / generic |
-| サービス生存 | Pi AからPi Bへの実HTTP GET | status / latency |
+| Application | UDP socketまで到達した後 | XDPは通過、nftablesも通過 |
+| nftables | Linux network stack内 | XDPは通過 |
+| XDP | NIC driver付近 | 後段のnetwork stackへ渡さない |
 
-XDPの価値を「たくさんDROPした」ではなく、**後段へ渡さなかった仕事の差**として示します。
+標準設定は2,000 pps、128 byte、15秒です。各条件を3回ずつ実行し、開始順も入れ替えます。
 
-## なぜpacket viewerではないのか
+確かめたいのは、**同じパケットでも、止める位置によってPi Bの処理量に差が出るか**です。XDPが必ず最良だとは決めず、実機の値で比較します。
 
-Packet Journeyの主役はanimationではなく比較実験です。
+## 何を測るのか
 
-- 個々のpacket表示はRingBufのsample
-- 集計は競合を避けたper-CPU BPF map
-- benchmark中はpacketごとのeBPF logを出さない
-- cumulative counterではなくrunごとの差分を保存
-- native XDPが使えない場合はgenericへのfallbackを結果へ明記
-- public demoのfixtureと実測値を明確に区別
-
-設計判断の根拠は[受賞作・類似作品の調査](docs/RESEARCH_AND_POSITIONING.md)、再現条件は[実験プロトコル](docs/EXPERIMENT_PROTOCOL.md)にまとめています。展示時は[booth playbook](docs/BOOTH_PLAYBOOK.md)と[3D printed packet path](docs/HARDWARE_EXHIBIT.md)を使います。
-
-## 構成
-
-| パス | 役割 |
+| 指標 | 見ているもの |
 | --- | --- |
-| `xdp-hello/` | Rust + AyaのXDP/eBPF program、per-CPU counter、runtime mode切替 |
-| `tools/traffic-node/` | Pi Aの固定UDP負荷、HTTP canary、remote control |
-| `tools/experiment-runner/` | Pi Bで3条件を切替・反復し、CPU / softirq / app受信数をrun化 |
-| `tools/observation-hub/` | NDJSON eventを統合してdashboardへ配信 |
-| `observation-core/` | 実験条件と結果を曖昧な文字列にしないRust型 |
-| `dashboard/` | 4画面で停止位置と結果を追うTauri / React UI |
+| CPU busy | 計測中にPi BのCPUが動いていた割合 |
+| NET_RX softirq | Linuxが行ったネットワーク受信処理の回数 |
+| Application receive | UDP socketまで到達したパケットの割合 |
+| XDP attach mode | 実際に使われた`native` / `generic` |
+
+代表値は3回の中央値です。ばらつきを隠さないよう、最小値と最大値も残します。Piの型、kernel、interface、MTU、CPU governorもrunごとに記録します。
+
+HTTP GETは比較対象ではありません。UDP負荷をかけている間もPi B上のサービスが応答しているかを見るcanaryです。
+
+## デモの流れ
+
+Dashboardは、1画面に全情報を詰め込まず、実験を順番に追います。
+
+1. Applicationまで届ける
+2. nftablesで止める
+3. XDPで止める
+4. 3条件のCPU / NET_RX / 到達率を比べる
+
+GitHub Pages版はサンプルデータを再生します。Tauri版は、各条件3回分の`experiment_run`がそろった時だけ比較結果を表示します。
+
+## システム構成
+
+```text
+data path
+  Pi A: traffic-node ── UDP / HTTP ──> Pi B: XDP ─> nftables ─> socket
+
+control / observation
+  Pi B: experiment-runner
+          ├─ traffic-node、XDP、nftablesを条件ごとに切り替える
+          └─ CPU、NET_RX、socket到達数を測る
+                         │
+                         v
+                observation-hub ── NDJSON ──> Tauri dashboard
+```
+
+| component | 役割 |
+| --- | --- |
+| `xdp-hello/` | Rust + Ayaで書いたXDP programとloader |
+| `tools/traffic-node/` | UDP負荷の送信とHTTP canary |
+| `tools/experiment-runner/` | 3条件の切替、反復、計測、cleanup |
+| `tools/observation-hub/` | eventの集約とdashboardへの配信 |
+| `observation-core/` | 実験条件と結果の共通Rust型 |
+| `dashboard/` | Tauri / Reactの展示UI |
+
+XDPの全パケット数はper-CPU BPF mapで数えます。RingBufは画面表示用のsampleだけに使い、パケットごとのlogをbenchmark中に出しません。
 
 ## 実機で動かす
 
-Step 1〜3はforeground processです。**それぞれ別terminalまたはserviceとして起動したまま**にし、3つが動作してからStep 4のrunnerを実行してください。
+必要なもの:
 
-### 1. Pi B: observation-hub
+- Ethernet接続したRaspberry Pi 2台
+- Linux、Rust toolchain、nftables
+- Dashboard用のNode.jsとTauri prerequisites
+
+安全のため、自分が管理する隔離LANで実行してください。以下のStep 1〜3は別々のterminalで起動したままにします。
+
+<details>
+<summary>起動コマンドを開く</summary>
+
+### 1. Pi B: event hubとHTTP canary
 
 ```bash
 cargo run --release --manifest-path tools/Cargo.toml -p observation-hub -- \
@@ -76,7 +108,7 @@ cargo run --release --manifest-path tools/Cargo.toml -p observation-hub -- \
   --http-listen 0.0.0.0:8080
 ```
 
-### 2. Pi B: XDP
+### 2. Pi B: XDP program
 
 ```bash
 sudo cargo run --release --manifest-path xdp-hello/Cargo.toml -p xdp-hello -- \
@@ -88,9 +120,9 @@ sudo cargo run --release --manifest-path xdp-hello/Cargo.toml -p xdp-hello -- \
   --xdp-mode auto
 ```
 
-`auto`はnativeを先に試し、NIC/driverが非対応ならgenericへfallbackします。結果には実際のmodeが残ります。
+`auto`はnative modeを先に試し、NICやdriverが対応していない場合はgeneric modeへ切り替えます。実際に使ったmodeは結果へ保存されます。
 
-### 3. Pi A: traffic-node
+### 3. Pi A: traffic generator
 
 ```bash
 cargo run --release --manifest-path tools/Cargo.toml -p traffic-node -- \
@@ -101,9 +133,9 @@ cargo run --release --manifest-path tools/Cargo.toml -p traffic-node -- \
   --attack-pps 2000
 ```
 
-### 4. Pi B: 3条件を実行
+### 4. Pi B: experiment runner
 
-`experiment-runner`は自分専用の`inet packet_journey` tableだけを作成・削除します。nftables操作のためroot権限が必要です。
+`experiment-runner`はnftablesを操作するため、root権限が必要です。
 
 ```bash
 sudo cargo run --release --manifest-path tools/Cargo.toml -p experiment-runner -- \
@@ -123,21 +155,23 @@ npm install
 npm run tauri dev
 ```
 
-GitHub Pages用:
+</details>
+
+固定条件、計算式、実行順、cleanupは[実験プロトコル](docs/EXPERIMENT_PROTOCOL.md)にまとめています。
+
+## 計測上の制約
+
+- 現在のparserはEthernet上のIPv4を対象とし、IPv6、VLAN、fragment、IP optionsには対応していません。
+- `generic` XDPは`native` XDPと同じ条件として集計しません。
+- CPU busyとNET_RXは、Pi B全体の状態やbackground processの影響を受けます。
+- 1つのPi、kernel、NIC、送信rateで得た結果を、すべての環境へ一般化しません。
+- Control APIに認証はありません。外部へ公開しないでください。
+
+## Dashboardだけ確認する
 
 ```bash
+cd dashboard
+npm install
 npm run build:pages
+npm run preview:pages
 ```
-
-## 安全と計測上の範囲
-
-- 自分が管理する隔離LANだけで実行してください。
-- UDP負荷は1〜100,000 ppsにclampしています。
-- XDP parserの対象はEthernet上のIPv4、IP optionsなしです。IPv6、VLAN、fragmentは今回の実験範囲外です。
-- control APIは隔離した実験LAN向けで、認証機能はありません。
-- 1つのpacket size / 1つの送信rateだけで一般化しません。複数条件は次の検証項目です。
-- `generic` XDPはskb確保後に動くため、`native`と同じ結果として扱いません。
-
-## 次に作るもの
-
-3DプリンタでLinux受信経路を5つのblockとして作り、packetが止まった場所だけLEDを点灯させます。Web UIの装飾ではなく、application / nftables / XDPの位置関係を手で追える実験装置にします。造形前の検証手順は[hardware exhibit設計](docs/HARDWARE_EXHIBIT.md)にあります。
