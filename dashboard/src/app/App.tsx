@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { isWebDemo, subscribeStream } from "../stream.js";
 
 type HarborMode = "monitor" | "protect";
@@ -137,6 +137,7 @@ export default function App() {
   const [harbor, setHarbor] = useState<HarborState>(demo ? DEMO_STATE : INITIAL_STATE);
   const [latencies, setLatencies] = useState<number[]>(demo ? [18, 15, 16, 14, 15, 13, 14] : []);
   const [showDetails, setShowDetails] = useState(false);
+  const [experimentPhase, setExperimentPhase] = useState(0);
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       id: 1,
@@ -189,12 +190,17 @@ export default function App() {
         if (event.type === "traffic_health") {
           const latency = Number(event.latency_ms ?? 0);
           const success = Boolean(event.success);
-          setHarbor(current => ({
-            ...current,
-            healthSuccess: success,
-            latencyMs: latency,
-            statusCode: event.status_code == null ? null : Number(event.status_code),
-          }));
+          setHarbor(current => {
+            if (!demo && success) {
+              setExperimentPhase(current.attackActive ? (current.mode === "protect" ? 3 : 1) : 0);
+            }
+            return {
+              ...current,
+              healthSuccess: success,
+              latencyMs: latency,
+              statusCode: event.status_code == null ? null : Number(event.status_code),
+            };
+          });
           setLatencies(current => [...current, latency].slice(-30));
           if (!success) addLog("通常HTTPの応答が途切れました。", "warn");
           return;
@@ -211,6 +217,7 @@ export default function App() {
             target: event.target ?? current.target,
           }));
           addLog(active ? "UDP負荷通信を開始しました。" : "UDP負荷通信を停止しました。", active ? "warn" : "quiet");
+          setExperimentPhase(active ? 1 : 0);
           return;
         }
 
@@ -227,6 +234,7 @@ export default function App() {
               : "MONITORへ変更。パケットを観測して通過させます。",
             mode === "protect" ? "drop" : "quiet",
           );
+          setExperimentPhase(mode === "protect" ? 2 : 1);
           return;
         }
 
@@ -254,6 +262,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!demo) return;
+    const timer = window.setInterval(() => {
+      setExperimentPhase(current => (current + 1) % 4);
+    }, 4500);
+    return () => window.clearInterval(timer);
+  }, [demo]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setShowDetails(false);
       if (event.key.toLowerCase() === "d") setShowDetails(current => !current);
@@ -262,27 +278,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const modeIsProtect = harbor.mode === "protect";
   const dropRatio = harbor.total > 0 ? (harbor.dropped / harbor.total) * 100 : 0;
-  const hasLatency = harbor.latencyMs > 0;
-  const conclusion = harbor.attackActive
-    ? modeIsProtect
-      ? harbor.healthSuccess
-        ? `指定UDPをXDPで遮断中。HTTPは${harbor.statusCode ?? "—"} / ${harbor.latencyMs || "—"}msで応答しています。`
-        : "指定UDPをXDPで遮断中ですが、HTTP応答を確認できません。"
-      : "UDP負荷を観測しています。MONITORでは遮断せず、サーバーへ通過させます。"
-    : harbor.healthSuccess
-      ? `UDP負荷は停止中。HTTPは${harbor.statusCode ?? "—"} / ${harbor.latencyMs || "—"}msで応答しています。`
-      : "UDP負荷は停止中。HTTP応答を待っています。";
-
-  const serviceMaintained = harbor.healthSuccess;
-  const phase = !harbor.healthSuccess
-    ? 0
-    : !harbor.attackActive
-      ? 1
-      : !modeIsProtect
-        ? 2
-        : 3;
+  const phases = [
+    ["通常時の応答を測る", "BASELINE"],
+    ["テスト負荷を加える", "LOAD"],
+    ["指定した負荷を遮断", "DEFENSE"],
+    ["応答が続くか測る", "RESULT"],
+  ];
 
   return (
     <div className="booth-app">
@@ -310,112 +312,56 @@ export default function App() {
       </div>
 
       <main className="booth-screen">
-        <section className={`verdict ${serviceMaintained ? "verdict--success" : "verdict--failure"}`}>
-          <div className="verdict-label">この実験で確かめていること</div>
-          <h1>
-            <span>テスト負荷を加えても、</span>
-            <strong>HTTPサービスは応答を維持しています。</strong>
-          </h1>
-          <div className="verdict-state">
-            <span>{serviceMaintained ? "SERVICE UP" : "CHECKING"}</span>
-            <strong>{harbor.statusCode ?? "—"} <small>/ {harbor.latencyMs || "—"} ms</small></strong>
-          </div>
-        </section>
-
         <ol className="phase-strip" aria-label="デモの進行状況">
-          {[
-            ["1", "通常時の応答を測る"],
-            ["2", "テスト負荷を加える"],
-            ["3", "指定した負荷を遮断"],
-            ["4", "応答が続くか測る"],
-          ].map(([number, label], index) => (
-            <li key={number} className={index <= phase ? "is-complete" : ""}>
-              <span>{number}</span>
-              <strong>{label}</strong>
+          {phases.map(([label], index) => (
+            <li key={label} className={`${index < experimentPhase ? "is-complete" : ""} ${index === experimentPhase ? "is-active" : ""}`}>
+              <button type="button" onClick={() => demo && setExperimentPhase(index)} disabled={!demo}>
+                <span>{index + 1}</span>
+                <strong>{label}</strong>
+              </button>
             </li>
           ))}
         </ol>
 
-        <section className="live-experiment" aria-label="通信経路">
-          <div className="experiment-heading">
-            <span>EXPERIMENT DESIGN</span>
-            <h2>負荷を加えても、サービスは動き続けるか</h2>
-            <p>UDPとHTTPの優劣を比べているのではありません。役割の違う2つの通信を同時に使います。</p>
-            <dl className="role-key">
-              <div><dt>実験条件</dt><dd>UDP :{harbor.attackPort}で負荷を加える</dd></div>
-              <div><dt>結果指標</dt><dd>HTTP :8080の応答を測る</dd></div>
-            </dl>
+        <section className={`stage-scene stage-scene--${experimentPhase + 1}`} aria-live="polite">
+          <header className="stage-copy">
+            <span>STEP 0{experimentPhase + 1} / {phases[experimentPhase][1]}</span>
+            {experimentPhase === 0 && <><h1>まず、負荷をかける前の<br />HTTP応答を測ります。</h1><p>あとで同じURLを測り、負荷の前後でサービスが変わったか比べるための基準です。</p></>}
+            {experimentPhase === 1 && <><h1>次に、UDP :{harbor.attackPort}の<br />テスト負荷を加えます。</h1><p>UDPは比較相手ではなく、サーバーへ負荷を加える実験条件。HTTPの監視は止めずに続けます。</p></>}
+            {experimentPhase === 2 && <><h1>XDPが指定UDPを<br />入口で遮断します。</h1><p>パケットをアプリへ届ける前に破棄。HTTPは遮断対象ではないため、同じ入口を通過します。</p></>}
+            {experimentPhase === 3 && <><h1>負荷中もHTTPが応答。<br />防御は成功です。</h1><p>負荷を加えた状態で、最初と同じHTTP GETが成功するかを結果指標にしています。</p></>}
+          </header>
+
+          <div className="stage-visual">
+            {experimentPhase === 0 && <>
+              <div className="stage-node"><small>Raspberry Pi A</small><strong>HTTP GET</strong><em>サービス確認</em></div>
+              <div className="stage-flow stage-flow--http">→</div>
+              <div className="stage-node stage-node--service"><small>Raspberry Pi B / :8080</small><strong>{harbor.statusCode ?? 200}</strong><em>{harbor.latencyMs || 14} ms</em></div>
+            </>}
+            {experimentPhase === 1 && <>
+              <div className="stage-node stage-node--load"><small>Raspberry Pi A</small><strong>UDP :{harbor.attackPort}</strong><em>{formatCount(harbor.attackPps)} pps</em></div>
+              <div className="stage-flow stage-flow--load">→ → →</div>
+              <div className="stage-node"><small>Raspberry Pi B</small><strong>同じNICへ到着</strong><em>HTTP監視も継続中</em></div>
+            </>}
+            {experimentPhase === 2 && <>
+              <div className="stage-node stage-node--load"><small>指定UDP</small><strong>{formatCount(harbor.attackPps)} pps</strong><em>実験で加えた負荷</em></div>
+              <div className="stage-gate"><small>NIC直後</small><strong>XDP</strong><em>XDP_DROP</em></div>
+              <div className="stage-node stage-node--blocked"><small>アプリへ届く前</small><strong>{dropRatio.toFixed(1)}%</strong><em>{formatCount(harbor.dropped)} packets 遮断</em></div>
+            </>}
+            {experimentPhase === 3 && <>
+              <div className="result-chain"><small>負荷条件</small><strong>{formatCount(harbor.attackPps)} <em>pps</em></strong></div>
+              <div className="result-arrow">→</div>
+              <div className="result-chain"><small>入口で遮断</small><strong>{dropRatio.toFixed(1)}<em>%</em></strong></div>
+              <div className="result-arrow">→</div>
+              <div className="result-chain result-chain--success"><small>HTTPサービス</small><strong>{harbor.statusCode ?? 200} <em>/ {harbor.latencyMs || 14}ms</em></strong></div>
+            </>}
           </div>
 
-          <div className="path-board">
-            <div className="path-row path-row--udp">
-              <div className="path-source">
-                <small>Raspberry Pi A</small>
-                <strong>実験で加える負荷</strong>
-                <em>{harbor.attackActive ? `${formatCount(harbor.attackPps)} pps` : "停止中"}</em>
-              </div>
-              <div className="moving-line moving-line--udp" aria-hidden="true">
-                {Array.from({ length: 9 }).map((_, index) => <i key={index} style={{ "--i": index } as CSSProperties} />)}
-              </div>
-              <div className="xdp-checkpoint">
-                <small>Raspberry Pi B</small>
-                <strong>XDP</strong>
-                <span>{modeIsProtect ? "入口で判定" : "観測中"}</span>
-              </div>
-              <div className="blocked-line" aria-hidden="true"><i /><b>×</b></div>
-              <div className="path-result path-result--blocked">
-                <small>遮断対象に指定したUDP :{harbor.attackPort}</small>
-                <strong>{modeIsProtect ? "遮断" : "通過"}</strong>
-                <em>{formatCount(harbor.dropped)} packets</em>
-              </div>
-            </div>
-
-            <div className="path-row path-row--http">
-              <div className="path-source">
-                <small>Raspberry Pi A</small>
-                <strong>サービスの死活確認</strong>
-                <em>TCP :8080</em>
-              </div>
-              <div className="moving-line moving-line--http" aria-hidden="true">
-                {Array.from({ length: 4 }).map((_, index) => <i key={index} style={{ "--i": index } as CSSProperties} />)}
-              </div>
-              <div className="xdp-checkpoint xdp-checkpoint--pass">
-                <small>同じ入口</small>
-                <strong>XDP</strong>
-                <span>HTTPは遮断対象外</span>
-              </div>
-              <div className="passed-line" aria-hidden="true"><i /><b>→</b></div>
-              <div className="path-result path-result--service">
-                <small>守れたかを測る結果指標</small>
-                <strong>{harbor.healthSuccess ? "稼働中" : "応答待ち"}</strong>
-                <em>{harbor.statusCode ?? "—"} / {harbor.latencyMs || "—"} ms</em>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="proof-bar" aria-label="結論を支える実測値">
-          <div className="proof-intro">
-            <span>実験の因果関係</span>
-            <strong>条件 → 防御 → 結果</strong>
-          </div>
-          <div className="proof-item proof-item--load">
-            <span>1 / 負荷条件</span>
-            <strong>{formatCount(harbor.attackPps)} <small>pps</small></strong>
-            <em>traffic-node</em>
-          </div>
-          <div className="proof-arrow" aria-hidden="true">→</div>
-          <div className="proof-item proof-item--drop">
-            <span>2 / 防御処理</span>
-            <strong>{dropRatio.toFixed(1)}<small>%</small></strong>
-            <em>XDP_DROP / per-CPU map</em>
-          </div>
-          <div className="proof-arrow" aria-hidden="true">→</div>
-          <div className="proof-item proof-item--health">
-            <span>3 / 結果指標</span>
-            <strong>{harbor.statusCode ?? "—"} <small>/ {harbor.latencyMs || "—"}ms</small></strong>
-            <em>実HTTP GET</em>
-          </div>
+          <footer className="stage-note">
+            <span>{experimentPhase === 0 ? "比較の基準" : experimentPhase === 1 ? "実験条件" : experimentPhase === 2 ? "防御処理" : "結果"}</span>
+            <strong>{experimentPhase === 0 ? "通常時のHTTP応答" : experimentPhase === 1 ? "UDPで負荷を発生" : experimentPhase === 2 ? "XDPで対象だけ破棄" : "負荷中もサービスを維持"}</strong>
+            <em>{demo ? "約4.5秒で次へ・上の番号で切替" : "実機イベントに合わせて進行"}</em>
+          </footer>
         </section>
       </main>
 

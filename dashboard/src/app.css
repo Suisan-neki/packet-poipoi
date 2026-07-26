@@ -811,3 +811,246 @@ kbd {
     padding-bottom: 7px;
   }
 }
+
+/* Sequential demo: one question and one visual state at a time. */
+.booth-screen {
+  grid-template-rows: 54px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.phase-strip li {
+  display: block;
+}
+
+.phase-strip li button {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 10px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+}
+
+.phase-strip li button:not(:disabled) {
+  cursor: pointer;
+}
+
+.phase-strip li.is-active {
+  color: #f1efe8;
+  background: #0b2233;
+}
+
+.phase-strip li.is-active span {
+  color: #0b2233;
+  background: #b89a6d;
+}
+
+.stage-scene {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(340px, 0.78fr) minmax(560px, 1.35fr);
+  grid-template-rows: minmax(0, 1fr) 78px;
+  overflow: hidden;
+  color: #102634;
+  background: #f1efe8;
+  border-top: 7px solid #789d99;
+  animation: stage-in 380ms ease-out;
+}
+
+.stage-scene--2,
+.stage-scene--3 {
+  border-top-color: #9a6258;
+}
+
+@keyframes stage-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.stage-copy {
+  min-width: 0;
+  padding: clamp(30px, 5vh, 64px) clamp(30px, 4vw, 68px);
+  border-right: 1px solid #a9afab;
+}
+
+.stage-copy > span {
+  color: #789d99;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.stage-scene--2 .stage-copy > span,
+.stage-scene--3 .stage-copy > span {
+  color: #9a6258;
+}
+
+.stage-copy h1 {
+  margin: 22px 0 20px;
+  font-family: Georgia, "Yu Mincho", serif;
+  font-size: clamp(2rem, 3.2vw, 3.5rem);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.stage-copy p {
+  max-width: 620px;
+  margin: 0;
+  color: #5d7177;
+  font-size: clamp(0.83rem, 1.05vw, 1.05rem);
+  line-height: 1.85;
+}
+
+.stage-visual {
+  min-width: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(150px, 1fr);
+  align-items: center;
+  gap: clamp(14px, 2vw, 34px);
+  padding: clamp(28px, 5vw, 80px);
+  background: #e4e1d8;
+}
+
+.stage-node,
+.stage-gate,
+.result-chain {
+  padding: 24px 22px;
+  background: #f1efe8;
+  border-top: 6px solid #789d99;
+  box-shadow: 0 10px 24px rgba(11, 34, 51, 0.08);
+}
+
+.stage-node small,
+.stage-node strong,
+.stage-node em,
+.stage-gate small,
+.stage-gate strong,
+.stage-gate em,
+.result-chain small,
+.result-chain strong {
+  display: block;
+}
+
+.stage-node small,
+.stage-gate small,
+.result-chain small {
+  color: #65777c;
+  font-size: 0.7rem;
+}
+
+.stage-node strong,
+.stage-gate strong,
+.result-chain strong {
+  margin: 8px 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: clamp(1.25rem, 2vw, 2.15rem);
+}
+
+.stage-node em,
+.stage-gate em {
+  color: #466f64;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.76rem;
+  font-style: normal;
+}
+
+.stage-node--load,
+.stage-node--blocked {
+  border-top-color: #9a6258;
+}
+
+.stage-node--load em,
+.stage-node--blocked em {
+  color: #8e4e43;
+}
+
+.stage-gate {
+  color: #f1efe8;
+  background: #0b2233;
+  border-top-color: #b89a6d;
+  text-align: center;
+}
+
+.stage-gate small { color: #9ca8ad; }
+.stage-gate em { color: #dcaa91; }
+
+.stage-flow,
+.result-arrow {
+  color: #789d99;
+  font-family: Georgia, serif;
+  font-size: clamp(2rem, 4vw, 4.5rem);
+  text-align: center;
+}
+
+.stage-flow--load {
+  color: #9a6258;
+  letter-spacing: 0.05em;
+}
+
+.result-chain {
+  min-width: 0;
+  border-top-color: #9a6258;
+}
+
+.result-chain--success {
+  border-top-color: #789d99;
+}
+
+.result-chain strong em {
+  font-size: 0.5em;
+  font-style: normal;
+}
+
+.stage-note {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 130px 1fr auto;
+  align-items: center;
+  gap: 20px;
+  padding: 0 28px;
+  color: #f1efe8;
+  background: #0b2233;
+}
+
+.stage-note span {
+  color: #b89a6d;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.stage-note strong {
+  font-family: Georgia, "Yu Mincho", serif;
+  font-size: 1rem;
+}
+
+.stage-note em {
+  color: #9ca8ad;
+  font-size: 0.66rem;
+  font-style: normal;
+}
+
+@media (max-height: 760px) {
+  .booth-screen {
+    grid-template-rows: 42px minmax(0, 1fr);
+  }
+
+  .stage-scene {
+    grid-template-rows: minmax(0, 1fr) 62px;
+  }
+
+  .stage-copy {
+    padding-top: 26px;
+    padding-bottom: 26px;
+  }
+
+  .stage-copy h1 {
+    margin: 14px 0;
+    font-size: clamp(1.65rem, 2.8vw, 2.8rem);
+  }
+}
