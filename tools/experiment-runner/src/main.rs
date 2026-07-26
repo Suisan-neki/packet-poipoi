@@ -144,7 +144,8 @@ async fn main() -> anyhow::Result<()> {
 
 fn condition_order(repetition: u16) -> [DropPoint; 3] {
     let mut order = DropPoint::ALL;
-    order.rotate_left(usize::from(repetition.saturating_sub(1)) % order.len());
+    let rotation = usize::from(repetition.saturating_sub(1)) % order.len();
+    order.rotate_left(rotation);
     order
 }
 
