@@ -1,8 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-/** GitHub Pages: https://<user>.github.io/packet-journey/ */
-const base = process.env.GITHUB_PAGES === "true" ? "/packet-journey/" : "/";
+/** GitHub Pages: https://<user>.github.io/packet-poipoi/ */
+const base = process.env.GITHUB_PAGES === "true" ? "/packet-poipoi/" : "/";
 const buildId = process.env.GITHUB_SHA?.slice(0, 7) ?? "local";
 
 export default defineConfig({

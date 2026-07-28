@@ -6,5 +6,6 @@ pub use events::{
     StreamEvent, TrafficHealthEvent, UpstreamEvent,
 };
 pub use experiment::{
-    DropPoint, ExperimentEnvironment, ExperimentRun, ExperimentRunError, XdpAttachMode,
+    DropPoint, ExperimentEnvironment, ExperimentRun, ExperimentRunError, ServiceHealthSummary,
+    SweepPlan, XdpAttachMode,
 };

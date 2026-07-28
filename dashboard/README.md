@@ -1,15 +1,18 @@
 # パケットぽいぽい dashboard
 
-同じ量の実験用通信を「アプリまで運ぶ・OSの途中で止める・LANの入口で止める」の3条件で比べる展示UIです。Application / nftables / XDPは、それぞれの技術上の条件名として併記します。
+Application / nftables / XDPの各条件でUDP負荷を段階的に上げ、
+同じRaspberry Pi上のHTTP serviceが維持できた最大ppsを比べる展示UIです。
 
-## 画面
+## 4画面
 
-1. アプリまで運ぶ（Application）
-2. OSの途中で止める（nftables）
-3. LANの入口で止める（XDP）
-4. Piの仕事量、OSの受信処理、アプリ到達率を比較
+1. Applicationで捨てたときの負荷上限
+2. nftablesで捨てたときの負荷上限
+3. XDPで捨てたときの負荷上限
+4. HTTP成功率99%以上かつp95 100ms以下を維持できた最大ppsを比較
 
-HTTPは比較対象ではなく、負荷中もPi Bのserviceが応答するかを見るcanaryとして常に上部へ固定しています。
+各条件画面の中心は、500 → 50,000 ppsの負荷レールです。
+それぞれのrateを「維持 / 限界超え」で示し、最後に最大pass rateを横並びにします。
+CPUとNET_RXは勝敗ではなく、限界が動いた理由を読む補助指標です。
 
 ## GitHub Pages
 
@@ -19,9 +22,10 @@ npm run build:pages
 npm run preview:pages
 ```
 
-公開URL: https://suisan-neki.github.io/packet-journey/
+公開URL: https://suisan-neki.github.io/packet-poipoi/
 
-Web buildは画面確認用のサンプルデータを再生します。badgeとfooterでサンプルであることを明示し、数値を実測として扱いません。
+Web buildは画面説明用のサンプルデータを再生します。
+badgeとfooterでサンプルであることを明示し、実測値として扱いません。
 
 ## Tauri / live
 
@@ -29,7 +33,8 @@ Web buildは画面確認用のサンプルデータを再生します。badgeと
 npm run tauri dev
 ```
 
-Tauri版は`127.0.0.1:9010`のNDJSON streamを購読します。各条件3回分の`experiment_run`がそろうと比較画面へ進みます。
+Tauri版は`127.0.0.1:9010`のNDJSON streamを購読します。
+各drop point・各rateで`SweepPlan.repetitions`ぶんのrunがそろうと比較画面へ進みます。
 
 ## Port
 
@@ -38,6 +43,6 @@ Tauri版は`127.0.0.1:9010`のNDJSON streamを購読します。各条件3回分
 | 9000 | xdp-hello event stream |
 | 9001 | traffic-node / experiment-runner ingest |
 | 9010 | dashboard stream |
-| 8080 | HTTP canary |
+| 8080 | HTTP service |
 | 9020 | XDP mode control |
 | 9030 | traffic-node load control |

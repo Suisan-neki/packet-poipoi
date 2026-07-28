@@ -251,7 +251,7 @@ kbd {
   min-width: 0;
   padding: 0 18px;
   display: grid;
-  grid-template-columns: 210px minmax(0, 1fr) 220px;
+  grid-template-columns: 360px minmax(0, 1fr) 220px;
   align-items: center;
   color: var(--navy);
   background: #d8d4c9;
@@ -408,7 +408,7 @@ kbd {
   height: 3px;
   background: var(--sand);
   transform-origin: left;
-  animation: phase-progress 7.5s linear both;
+  animation: phase-progress 9s linear both;
 }
 
 @keyframes phase-progress {
@@ -591,8 +591,41 @@ kbd {
   line-height: 1.9;
 }
 
+.limit-callout {
+  margin-top: clamp(18px, 2.4vw, 32px);
+  padding: 14px 16px 13px;
+  background: var(--navy);
+  border-left: 5px solid var(--teal);
+}
+
+.stage--2 .limit-callout,
+.stage--3 .limit-callout {
+  border-left-color: var(--rust);
+}
+
+.limit-callout small,
+.limit-callout strong {
+  display: block;
+}
+
+.limit-callout small {
+  margin-bottom: 5px;
+  color: #9fb1b2;
+  font: 0.56rem var(--mono);
+}
+
+.limit-callout strong {
+  color: #b7dac9;
+  font: 800 clamp(1.25rem, 1.8vw, 1.85rem) var(--mono);
+}
+
+.limit-callout em {
+  color: #879da2;
+  font: normal 0.54rem var(--mono);
+}
+
 .look-here {
-  margin-top: auto;
+  margin-top: 14px;
   padding: 14px 16px;
   background: #e0dcd2;
   border-left: 5px solid var(--sand);
@@ -620,15 +653,15 @@ kbd {
   min-height: 0;
   padding: clamp(24px, 3vw, 48px);
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 82px;
-  gap: 16px;
+  grid-template-rows: minmax(135px, 0.88fr) auto 82px;
+  gap: 13px;
 }
 
 .layer-path {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 70px minmax(115px, 1fr) 58px;
+  grid-template-rows: 62px minmax(90px, 1fr);
   align-items: center;
 }
 
@@ -764,22 +797,80 @@ kbd {
   color: #e0a28e;
 }
 
-.path-reading {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  padding-top: 14px;
+.load-sweep {
+  min-width: 0;
   border-top: 2px solid var(--navy);
 }
 
-.path-reading span {
-  color: var(--ink-soft);
-  font-size: 0.62rem;
+.load-sweep > header {
+  padding: 8px 0 7px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.path-reading strong {
-  color: var(--navy);
-  font: 700 0.77rem var(--serif);
+.load-sweep > header span {
+  color: var(--teal-dark);
+  font: 700 0.55rem var(--mono);
+  letter-spacing: 0.09em;
+}
+
+.load-sweep > header strong {
+  color: var(--ink-soft);
+  font-size: 0.57rem;
+}
+
+.rate-steps {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+.rate-step {
+  min-width: 0;
+  padding: 10px 10px 9px;
+  background: #e4e0d7;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.rate-step small,
+.rate-step strong,
+.rate-step span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rate-step small {
+  color: var(--ink-soft);
+  font: 0.52rem var(--mono);
+}
+
+.rate-step strong {
+  margin: 4px 0 3px;
+  color: var(--teal-dark);
+  font: 800 0.78rem var(--mono);
+}
+
+.rate-step span {
+  color: #788687;
+  font: 0.47rem var(--mono);
+}
+
+.rate-step.is-failed {
+  background: #eaded8;
+}
+
+.rate-step.is-failed strong {
+  color: var(--rust);
+}
+
+.rate-step.is-failed small {
+  color: #8c6259;
 }
 
 .condition-metrics {
@@ -1173,11 +1264,12 @@ kbd {
 
   .stage-path {
     padding: 20px 30px;
-    grid-template-rows: minmax(0, 1fr) 70px;
+    grid-template-rows: minmax(120px, 0.82fr) auto 70px;
+    gap: 8px;
   }
 
   .layer-path {
-    grid-template-rows: 60px minmax(100px, 1fr) 48px;
+    grid-template-rows: 52px minmax(80px, 1fr);
   }
 
   .layer-card {
@@ -1187,6 +1279,22 @@ kbd {
 
   .look-here {
     padding: 10px 13px;
+  }
+
+  .limit-callout {
+    margin-top: 12px;
+    padding-top: 10px;
+    padding-bottom: 9px;
+  }
+
+  .load-sweep > header {
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+
+  .rate-step {
+    padding-top: 7px;
+    padding-bottom: 6px;
   }
 
   .compare-stage {
@@ -1245,6 +1353,10 @@ kbd {
 
   .fixed-condition {
     gap: 10px;
+  }
+
+  .canary-strip {
+    grid-template-columns: 330px minmax(0, 1fr) 190px;
   }
 
   .layer-sequence {
