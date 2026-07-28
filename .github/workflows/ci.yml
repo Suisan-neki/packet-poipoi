@@ -1,4 +1,4 @@
-name: Validate packet journey
+name: Validate packet poipoi
 
 on:
   pull_request:

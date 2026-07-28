@@ -58,6 +58,78 @@ pub struct ExperimentEnvironment {
     pub cpu_governor: String,
 }
 
+/// 1つの負荷条件で繰り返したHTTP probeの集計。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServiceHealthSummary {
+    pub checks: u64,
+    pub successes: u64,
+    pub latency_p95_ms: u64,
+    pub latency_max_ms: u64,
+    pub min_success_percent: f32,
+    pub max_p95_latency_ms: u64,
+}
+
+impl ServiceHealthSummary {
+    pub fn success_percent(&self) -> f32 {
+        if self.checks == 0 {
+            return 0.0;
+        }
+        self.successes as f32 * 100.0 / self.checks as f32
+    }
+
+    pub fn service_maintained(&self) -> bool {
+        self.checks > 0
+            && self.success_percent() >= self.min_success_percent
+            && self.latency_p95_ms <= self.max_p95_latency_ms
+    }
+
+    fn validate(&self) -> Result<(), ExperimentRunError> {
+        if self.checks == 0 {
+            return Err(ExperimentRunError::ZeroHealthChecks);
+        }
+        if self.successes > self.checks {
+            return Err(ExperimentRunError::HealthSuccessesExceedChecks);
+        }
+        if !self.min_success_percent.is_finite()
+            || !(0.0..=100.0).contains(&self.min_success_percent)
+        {
+            return Err(ExperimentRunError::InvalidHealthSuccessThreshold);
+        }
+        if self.max_p95_latency_ms == 0 {
+            return Err(ExperimentRunError::ZeroHealthLatencyThreshold);
+        }
+        if self.latency_p95_ms > self.latency_max_ms {
+            return Err(ExperimentRunError::HealthP95ExceedsMaximum);
+        }
+        Ok(())
+    }
+}
+
+/// 段階的に負荷を上げる実験全体の条件。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SweepPlan {
+    pub pps_steps: Vec<u64>,
+    pub repetitions: u16,
+}
+
+impl SweepPlan {
+    fn validate(&self, target_pps: u64) -> Result<(), ExperimentRunError> {
+        if self.repetitions == 0 {
+            return Err(ExperimentRunError::ZeroSweepRepetitions);
+        }
+        if self.pps_steps.is_empty()
+            || self.pps_steps.iter().any(|pps| *pps == 0)
+            || self.pps_steps.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(ExperimentRunError::InvalidSweepSteps);
+        }
+        if !self.pps_steps.contains(&target_pps) {
+            return Err(ExperimentRunError::TargetMissingFromSweep);
+        }
+        Ok(())
+    }
+}
+
 /// 1条件ぶんの再現可能な実測結果。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExperimentRun {
@@ -76,6 +148,11 @@ pub struct ExperimentRun {
     pub xdp_attach_mode: XdpAttachMode,
     #[serde(default)]
     pub environment: ExperimentEnvironment,
+    /// 古い固定rate実験との互換性を保つため、sweep実験だけ値を持つ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_health: Option<ServiceHealthSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<SweepPlan>,
 }
 
 impl ExperimentRun {
@@ -128,6 +205,18 @@ impl ExperimentRun {
         {
             return Err(ExperimentRunError::MissingXdpAttachMode);
         }
+        if let Some(service_health) = &self.service_health {
+            service_health.validate()?;
+        }
+        if let Some(sweep) = &self.sweep {
+            sweep.validate(self.target_pps)?;
+            if self.repetition > sweep.repetitions {
+                return Err(ExperimentRunError::RepetitionExceedsSweep);
+            }
+            if self.service_health.is_none() {
+                return Err(ExperimentRunError::SweepMissingServiceHealth);
+            }
+        }
         Ok(())
     }
 }
@@ -143,6 +232,16 @@ pub enum ExperimentRunError {
     InvalidCpuPercent,
     ReceivedMoreThanSent,
     MissingXdpAttachMode,
+    ZeroHealthChecks,
+    HealthSuccessesExceedChecks,
+    InvalidHealthSuccessThreshold,
+    ZeroHealthLatencyThreshold,
+    HealthP95ExceedsMaximum,
+    ZeroSweepRepetitions,
+    InvalidSweepSteps,
+    TargetMissingFromSweep,
+    RepetitionExceedsSweep,
+    SweepMissingServiceHealth,
 }
 
 #[cfg(test)]
@@ -168,6 +267,8 @@ mod tests {
                 XdpAttachMode::NotUsed
             },
             environment: ExperimentEnvironment::default(),
+            service_health: None,
+            sweep: None,
         }
     }
 
@@ -192,5 +293,37 @@ mod tests {
         application.packets_received_by_app = application.packets_sent;
         assert_eq!(application.app_receive_percent(), 100.0);
         assert_eq!(application.validate(), Ok(()));
+    }
+
+    #[test]
+    fn decides_whether_the_service_met_its_thresholds() {
+        let health = ServiceHealthSummary {
+            checks: 50,
+            successes: 50,
+            latency_p95_ms: 42,
+            latency_max_ms: 70,
+            min_success_percent: 99.0,
+            max_p95_latency_ms: 100,
+        };
+        assert_eq!(health.success_percent(), 100.0);
+        assert!(health.service_maintained());
+    }
+
+    #[test]
+    fn sweep_run_records_plan_and_service_health() {
+        let mut sweep_run = run(DropPoint::Xdp);
+        sweep_run.service_health = Some(ServiceHealthSummary {
+            checks: 50,
+            successes: 49,
+            latency_p95_ms: 80,
+            latency_max_ms: 120,
+            min_success_percent: 98.0,
+            max_p95_latency_ms: 100,
+        });
+        sweep_run.sweep = Some(SweepPlan {
+            pps_steps: vec![500, 2_000, 5_000],
+            repetitions: 3,
+        });
+        assert_eq!(sweep_run.validate(), Ok(()));
     }
 }

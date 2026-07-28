@@ -1,99 +1,108 @@
 # パケットぽいぽい
 
-Raspberry PiとRust/eBPFで、通信の「捨てどころ」を比べる実験。
+**捨てる位置で、Webサービスが耐えられる負荷の上限は何倍変わる？**
 
-止めると決めた通信を、コンピュータの入口で捨てるのと、アプリまで運んでから捨てるのでは、仕事量はどれくらい変わるのか。
+2台のRaspberry Piで通信負荷を段階的に上げ、不要な通信を
+Application / nftables / XDPのどこで捨てると、同じPi上のWebサービスが
+どこまで応答を維持できるかを実測する装置です。
 
-パケットぽいぽいは、この問いを2台のRaspberry Piと実際の通信で確かめます。
+[Webデモを見る](https://suisan-neki.github.io/packet-poipoi/)
 
-[Webデモを見る](https://suisan-neki.github.io/packet-journey/)
+> Webデモは画面説明用のサンプルデータです。展示ではRaspberry Piの実測値へ置き換わります。
 
-> Webデモの数値は、画面の流れを確認するためのサンプルです。実測結果ではありません。
+## 30秒でわかる実験
 
-## なぜ測るのか
+公開されたコンピュータには、本来のサービスが使う通信と、
+受け取らずに止めたい通信の両方が届きます。
 
-通信を捨てること自体が目的ではありません。
+不要な通信は早く捨てるほど処理を省けそうです。ただし、それだけなら予想できます。
+パケットぽいぽいが測るのは、**その違いがWebサービスの限界を実際に何倍動かすか**です。
 
-公開されたコンピュータには、本来のサービスが使う通信だけでなく、運用上は受け取らずに止めたい通信も届きます。その通信もアプリまで運べば、OSやアプリは受信のためにCPUを使います。早く止めれば、その先へ運ぶ仕事を発生させず、CPUの余力を本来のサービスへ残せる可能性があります。
+1. Pi AからPi BのWebサービスへHTTP GETを送り、通常時の応答を測る
+2. 別のUDP通信を500、2,000、5,000、10,000、20,000、50,000回/秒と増やす
+3. UDPを捨てる位置だけ変え、負荷中も同じHTTP GETを繰り返す
+4. HTTP成功率99%以上かつp95応答時間100ms以下を維持できた最大負荷を比べる
 
-では、止める位置だけで実際の仕事量はどこまで変わるのか。思い込みではなく実機で確かめます。
+ここでUDPとHTTPの優劣を比べているわけではありません。
+UDPは量を制御しやすい**実験用の負荷**、HTTPは守りたい**本来のサービス**です。
 
-パケットぽいぽいは防御製品ではありません。普段は見えない「どの段階で通信を止めるか」という設計の違いを、手元の小さなコンピュータで測り、目で追えるようにする実験装置です。
+## 3つの捨てどころ
 
-## 何を比べるのか
-
-一方のPiから、もう一方のPiへ同じ量の実験用通信を送ります。変えるのは、受け取ったPiが通信を止める位置だけです。
+受信したデータは、LANの入口からLinuxの処理を通り、最後にアプリへ届きます。
 
 ```text
-Raspberry Pi A                         Raspberry Pi B
+Pi A                         Raspberry Pi B
 
-実験用の通信 ───────> LANの入口 ─> 入口の判定 ─> OSの受信処理 ─> 途中の判定 ─> アプリ
-                       NIC          XDP       network stack    nftables    Application
+実験用UDP ───> NIC ───> XDP ───> Linux network stack ───> nftables ───> Application
+                    入口で捨てる            途中で捨てる              最後に捨てる
+
+HTTP GET ───────────────────────────────────────────────────────────> Web service
+         負荷の前後・負荷中に同じURLの成功率と応答時間を測る
 ```
 
-通信を最後まで運べば、入口からアプリまでの処理がすべて動きます。途中や入口で止めれば、その先の処理は発生しません。実際にどの程度の差が出るかを、PiのCPUとLinuxの受信処理から測ります。
-
-比較する3条件は次のとおりです。
-
-| 何をするか | 技術上の条件名 | 通信が通る範囲 |
+| 条件 | どこで捨てるか | その先で省ける処理 |
 | --- | --- | --- |
-| アプリまで運んでから捨てる | Application | 入口からUDP socketまで |
-| OSの途中で止める | nftables | Linux network stackまで |
-| LANの入口で止める | XDP | NIC driver付近まで |
+| Application | UDP socketで受信した後 | なし |
+| nftables | Linuxのfirewall | アプリまで運び、受信する処理 |
+| XDP | NIC driverに近い入口 | 通常のLinux受信処理とアプリ処理 |
 
-標準設定は2,000 pps、128 byte、15秒です。各条件を3回ずつ実行し、開始順も入れ替えます。
+入口で捨てれば常に正解、という作品ではありません。
+入口ほど使える判断材料は少なく、URLやユーザーの状態などアプリの文脈が必要な判定はできません。
+この実験では「UDPの宛先port 4000を止める」と事前に決められる条件だけを扱います。
 
-実験用の通信にはUDPを使います。接続や再送の影響を受けにくく、同じrateで送り続けやすいためです。XDPが必ず最良だとは決めず、実機の値で比較します。
+## 何を結果にするか
 
-## 何を測るのか
+主結果はCPU使用率ではなく、各条件の**サービス維持限界**です。
 
-| 指標 | 見ているもの |
+| 指標 | 役割 |
 | --- | --- |
-| Piの仕事量（CPU busy） | 計測中にCPUが動いていた割合 |
-| OSの受信処理（NET_RX softirq） | Linuxが行ったネットワーク受信処理の回数 |
-| アプリ到達率 | UDP socketまで届いた通信の割合 |
-| XDPの動作条件 | 実際に使われた`native` / `generic` mode |
+| 最大維持負荷（pps） | HTTPの基準を最後に満たしたUDP送信量。3条件の勝敗を決める主結果 |
+| HTTP成功率 | 負荷中のGETが成功した割合。99%以上が合格 |
+| HTTP p95 latency | 遅い側5%の境目。100ms以下が合格 |
+| CPU busy | サービス限界が動いた理由を読む補助指標 |
+| NET_RX softirq | Linuxが行った受信処理量を読む補助指標 |
+| Application到達率 | 指定した場所で実際にUDPを止められたかの確認 |
 
-代表値は3回の中央値です。ばらつきを隠さないよう、最小値と最大値も残します。Piの型、kernel、interface、MTU、CPU governorもrunごとに記録します。
+各rate・各停止位置を3回ずつ測ります。条件の開始位置を反復ごとに回し、
+rateは昇順と降順を交互にして、熱や実行順の偏りを減らします。
+Piの型、kernel、interface、MTU、CPU governor、XDP attach modeもrunへ保存します。
 
-横では、Pi B上のWebサービスが応答しているかも確認します。これは「守りたいサービス」の生存確認で、3条件を比較する指標ではありません。技術的にはHTTP GETをcanaryとして使っています。
+## デモの見方
 
-## デモの流れ
+Dashboardはスクロールせず、4画面を順に追います。
 
-Dashboardは、1画面に全情報を詰め込まず、実験を順番に追います。
+1. Applicationで捨てたときの負荷上限
+2. nftablesで捨てたときの負荷上限
+3. XDPで捨てたときの負荷上限
+4. 3条件の最大維持負荷を比較
 
-1. アプリまで運ぶ（Application）
-2. OSの途中で止める（nftables）
-3. LANの入口で止める（XDP）
-4. Piの仕事量と、OS・アプリまで届いた処理を比べる
-
-GitHub Pages版はサンプルデータを再生します。Tauri版は、各条件3回分の`experiment_run`がそろった時だけ比較結果を表示します。
+各条件の画面では、負荷を上げた6段階を「維持 / 限界超え」で表示します。
+最後の画面では、CPUの小ささではなく、HTTPが耐えた最大ppsを横並びにします。
 
 ## システム構成
 
 ```text
-data path
-  Pi A: traffic-node ── UDP / HTTP ──> Pi B: XDP ─> nftables ─> socket
-
-control / observation
-  Pi B: experiment-runner
-          ├─ traffic-node、XDP、nftablesを条件ごとに切り替える
-          └─ CPU、NET_RX、socket到達数を測る
-                         │
-                         v
-                observation-hub ── NDJSON ──> Tauri dashboard
+Pi A
+  traffic-node
+    ├─ UDP load generator ───────────────┐
+    └─ repeated HTTP probe ──────────────┤
+                                         v
+Pi B                                 XDP → nftables → UDP socket
+  experiment-runner ─ condition/rate切替、CPU・NET_RX・socket到達数を計測
+  observation-hub ─── HTTP service / event集約 ───> Tauri dashboard
 ```
 
 | component | 役割 |
 | --- | --- |
 | `xdp-hello/` | Rust + Ayaで書いたXDP programとloader |
-| `tools/traffic-node/` | UDP負荷の送信とHTTP canary |
-| `tools/experiment-runner/` | 3条件の切替、反復、計測、cleanup |
-| `tools/observation-hub/` | eventの集約とdashboardへの配信 |
-| `observation-core/` | 実験条件と結果の共通Rust型 |
+| `tools/traffic-node/` | rate可変UDP負荷と約200ms間隔のHTTP probe |
+| `tools/experiment-runner/` | rate sweep、3条件の切替、反復、計測、cleanup |
+| `tools/observation-hub/` | HTTP service、event集約、dashboard配信 |
+| `observation-core/` | sweep条件、HTTP集計、実測結果の共通Rust型 |
 | `dashboard/` | Tauri / Reactの展示UI |
 
-XDPの全パケット数はper-CPU BPF mapで数えます。RingBufは画面表示用のsampleだけに使い、パケットごとのlogをbenchmark中に出しません。
+XDPのfull countはper-CPU BPF mapで数えます。RingBufは画面表示用sampleだけに使い、
+packetごとのlogでbenchmarkを汚しません。
 
 ## 実機で動かす
 
@@ -103,12 +112,12 @@ XDPの全パケット数はper-CPU BPF mapで数えます。RingBufは画面表�
 - Linux、Rust toolchain、nftables
 - Dashboard用のNode.jsとTauri prerequisites
 
-安全のため、自分が管理する隔離LANで実行してください。以下のStep 1〜3は別々のterminalで起動したままにします。
+自分が管理する隔離LANで実行してください。Step 1〜3は別terminalで起動したままにします。
 
 <details>
 <summary>起動コマンドを開く</summary>
 
-### 1. Pi B: event hubとHTTP canary
+### 1. Pi B: event hubとHTTP service
 
 ```bash
 cargo run --release --manifest-path tools/Cargo.toml -p observation-hub -- \
@@ -129,7 +138,8 @@ sudo cargo run --release --manifest-path xdp-hello/Cargo.toml -p xdp-hello -- \
   --xdp-mode auto
 ```
 
-`auto`はnative modeを先に試し、NICやdriverが対応していない場合はgeneric modeへ切り替えます。実際に使ったmodeは結果へ保存されます。
+`auto`はnativeを先に試し、NICやdriverが非対応ならgenericへ切り替えます。
+要求値ではなく、実際にattachできたmodeを結果へ保存します。
 
 ### 3. Pi A: traffic generator
 
@@ -139,12 +149,12 @@ cargo run --release --manifest-path tools/Cargo.toml -p traffic-node -- \
   --target <PI_B_IP> \
   --defense-control <PI_B_IP>:9020 \
   --control-listen 0.0.0.0:9030 \
-  --attack-pps 2000
+  --health-interval-ms 200
 ```
 
 ### 4. Pi B: experiment runner
 
-`experiment-runner`はnftablesを操作するため、root権限が必要です。
+`experiment-runner`はnftablesを操作するためroot権限が必要です。
 
 ```bash
 sudo cargo run --release --manifest-path tools/Cargo.toml -p experiment-runner -- \
@@ -152,8 +162,11 @@ sudo cargo run --release --manifest-path tools/Cargo.toml -p experiment-runner -
   --xdp-control 127.0.0.1:9020 \
   --hub 127.0.0.1:9001 \
   --interface eth0 \
-  --duration-secs 15 \
-  --repetitions 3
+  --pps-steps 500,2000,5000,10000,20000,50000 \
+  --duration-secs 10 \
+  --repetitions 3 \
+  --service-min-success-percent 99 \
+  --service-max-p95-ms 100
 ```
 
 ### 5. Dashboard
@@ -166,14 +179,17 @@ npm run tauri dev
 
 </details>
 
-固定条件、計算式、実行順、cleanupは[実験プロトコル](docs/EXPERIMENT_PROTOCOL.md)にまとめています。
+計算式、実行順、判定方法、cleanupは
+[実験プロトコル](docs/EXPERIMENT_PROTOCOL.md)にまとめています。
 
 ## 計測上の制約
 
+- パケットぽいぽいは攻撃を検知する防御製品ではなく、停止位置の設計差を測る実験装置です。
 - 現在のparserはEthernet上のIPv4を対象とし、IPv6、VLAN、fragment、IP optionsには対応していません。
-- `generic` XDPは`native` XDPと同じ条件として集計しません。
-- CPU busyとNET_RXは、Pi B全体の状態やbackground processの影響を受けます。
-- 1つのPi、kernel、NIC、送信rateで得た結果を、すべての環境へ一般化しません。
+- `generic` XDPと`native` XDPは同じ結果として混ぜません。
+- CPU busyとNET_RXはbackground process、thermal throttling、NIC、driverの影響を受けます。
+- rate sweepは試した段階の間にある厳密な限界値までは特定しません。
+- 1台のPiで得た結果を、すべてのmachineやworkloadへ一般化しません。
 - Control APIに認証はありません。外部へ公開しないでください。
 
 ## Dashboardだけ確認する
