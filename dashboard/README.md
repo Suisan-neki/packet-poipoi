@@ -1,4 +1,4 @@
-# Packet Journey dashboard
+# パケットぽいぽい dashboard
 
 同じ量の実験用通信を「アプリまで運ぶ・OSの途中で止める・LANの入口で止める」の3条件で比べる展示UIです。Application / nftables / XDPは、それぞれの技術上の条件名として併記します。
 
