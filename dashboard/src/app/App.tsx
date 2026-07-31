@@ -114,7 +114,7 @@ const PHASES = [
     dropPoint: "xdp",
   },
   {
-    label: "限界を比べる",
+    label: "結果を比べる",
     short: "結果",
     code: "COMPARE",
     dropPoint: null,
@@ -127,29 +127,25 @@ const CONDITION_COPY: Record<
     eyebrow: string;
     title: string;
     description: string;
-    focus: string;
   }
 > = {
   application: {
-    eyebrow: "条件1 / APPLICATION",
-    title: "アプリまで運んでから捨てる。",
+    eyebrow: "条件1｜Application",
+    title: "アプリで捨てる",
     description:
-      "不要と決めたUDPも、Linuxの受信処理を通してアプリが受け取ります。この条件を基準に、HTTPが止まらずに耐えられる負荷の上限を探します。",
-    focus: "右の負荷を上げ、HTTPが維持できなくなる境目を見る",
+      "破棄対象のUDPパケットをアプリまで届け、受信後に捨てます。この条件を基準に、Webサービスが判定基準を満たす最大ppsを測ります。",
   },
   netfilter: {
-    eyebrow: "条件2 / NFTABLES",
-    title: "Linuxの途中で捨てる。",
+    eyebrow: "条件2｜nftables",
+    title: "nftablesで捨てる",
     description:
-      "同じUDPをfirewallで止め、アプリへ運ぶ仕事を省きます。送る量と判定基準は変えず、HTTPが耐えられる上限だけを比べます。",
-    focus: "条件1より右の負荷まで「維持」が続くかを見る",
+      "同じUDPパケットをnftablesで破棄し、アプリまでの受信処理を省きます。送信量と判定基準をそろえ、最大ppsを比較します。",
   },
   xdp: {
-    eyebrow: "条件3 / XDP",
-    title: "有線LANの入口で捨てる。",
+    eyebrow: "条件3｜XDP",
+    title: "XDPで捨てる",
     description:
-      "同じUDPをNIC直後のXDPで止め、通常のLinux受信処理へ進ませません。どれだけ早い段階で止めたかではなく、サービス限界がどこまで動いたかを測ります。",
-    focus: "最も高い負荷でもHTTPの基準を守れたかを見る",
+      "同じUDPパケットをNIC直後のXDPで破棄し、通常のLinux受信処理へ進ませません。この条件でWebサービスが判定基準を満たす最大ppsを測ります。",
   },
 };
 
@@ -421,9 +417,9 @@ function LayerPath({
   return (
     <div className={`layer-path layer-path--${dropPoint}`}>
       <div className="packet-source">
-        <span>実験用UDPを増やす</span>
+        <span>UDPパケットを増やす</span>
         <strong>
-          {formatPps(firstRate)} → {formatPps(lastRate)} /秒
+          {formatPps(firstRate)} → {formatPps(lastRate)} pps
         </strong>
         <em>{payloadBytes} byte · 宛先 :4000</em>
       </div>
@@ -491,15 +487,15 @@ function PredictionIntro({
   return (
     <div className="prediction-backdrop">
       <section className="prediction-panel" aria-labelledby="prediction-title">
-        <span>BEFORE THE DEMO / 専門知識は不要です</span>
+        <span>結果を予想する</span>
         <h2 id="prediction-title">
           どこで捨てると、
-          <strong>Webサービスは最も大きな負荷まで耐えられる？</strong>
+          <strong>Webサービスは最も高い負荷まで動き続ける？</strong>
         </h2>
         <p>
-          「早く捨てる方が有利そう」までは予想できます。この実験で知りたいのは、
-          その差が実機では何倍になるのか。UDPの量を段階的に増やしながら、
-          同じPiのHTTPが正常に応答できる上限を探します。
+          パケットを手前で捨てるほど、後段の処理は減ります。UDPパケットの
+          送信量を段階的に上げ、同じRaspberry Pi上のWebサービスが
+          判定基準を満たせる最大ppsを比べます。
         </p>
         <div className="prediction-choices">
           {choices.map((choice, index) => (
@@ -511,13 +507,13 @@ function PredictionIntro({
               <b>0{index + 1}</b>
               <span>
                 <strong>{choice.label}</strong>
-                <small>技術名: {choice.location}</small>
+                <small>{choice.location}</small>
               </span>
             </button>
           ))}
         </div>
         <button className="prediction-skip" type="button" onClick={onSkip}>
-          予想せず実験を見る →
+          予想せず進む →
         </button>
       </section>
     </div>
@@ -536,10 +532,10 @@ function LoadSweep({
   return (
     <div className="load-sweep">
       <header>
-        <span>LOAD SWEEP / 送信量を段階的に上げる</span>
+        <span>送信量を上げて計測</span>
         <strong>
-          HTTP成功率 {formatNumber(minSuccessPercent)}%以上 ＋ p95{" "}
-          {formatNumber(maxP95LatencyMs)}ms以下なら「維持」
+          HTTP成功率 {formatNumber(minSuccessPercent)}%以上かつ p95{" "}
+          {formatNumber(maxP95LatencyMs)}ms以下を「基準内」と判定
         </strong>
       </header>
       <div
@@ -553,16 +549,16 @@ function LoadSweep({
             className={`rate-step is-${rate.status}`}
             key={rate.targetPps}
           >
-            <small>目標 {formatPps(rate.targetPps)} /秒</small>
+            <small>目標 {formatPps(rate.targetPps)} pps</small>
             <strong>
               {rate.status === "maintained"
-                ? "維持"
+                ? "基準内"
                 : rate.status === "failed"
-                  ? "限界超え"
+                  ? "基準外"
                   : "測定不成立"}
             </strong>
             <span>
-              実測 {formatPps(rate.actualPps)} /秒 · HTTP{" "}
+              実測 {formatPps(rate.actualPps)} pps · HTTP{" "}
               {formatNumber(rate.successPercent)}%
             </span>
           </div>
@@ -594,22 +590,18 @@ function ConditionStage({
         <h2>{copy.title}</h2>
         <p>{copy.description}</p>
         <div className="limit-callout">
-          <small>HTTPを維持できた最大負荷</small>
+          <small>基準を満たした最大負荷</small>
           <strong>
             {formatPps(summary.maxMaintainedPps)}
-            <em> packets / 秒</em>
+            <em> pps</em>
           </strong>
-          <span>送信数と計測時間から求めた実測値</span>
+          <span>送信数と計測時間から算出</span>
         </div>
         {summary.nonMonotonic && (
           <div className="measurement-warning">
-            pass / failが負荷順に並びません。再測定が必要です。
+            負荷を上げたにもかかわらず、判定結果が前後しています。再測定が必要です。
           </div>
         )}
-        <div className="look-here">
-          <small>この画面で見るところ</small>
-          <strong>{copy.focus}</strong>
-        </div>
       </section>
 
       <section className="stage-path">
@@ -625,9 +617,9 @@ function ConditionStage({
         />
         <div className="condition-metrics">
           <div>
-            <small>耐えられた上限</small>
+            <small>最大pps</small>
             <strong>{formatPps(summary.maxMaintainedPps)} pps</strong>
-            <em>低いrateから連続した最大pass</em>
+            <em>低いppsから連続して基準内となった最大値</em>
           </div>
           <div>
             <small>上限時のHTTP成功率</small>
@@ -644,14 +636,14 @@ function ConditionStage({
             <em>基準 {formatNumber(maxP95LatencyMs)}ms以下</em>
           </div>
           <div>
-            <small>上限時のCPU busy</small>
+            <small>上限時のCPU使用率</small>
             <strong>
               {limit ? `${formatNumber(limit.cpuPercent, 1)}%` : "—"}
             </strong>
             <em>
               {dropPoint === "xdp"
                 ? `XDP ${summary.attachMode}`
-                : `${summary.totalRuns} runs`}
+                : `${summary.totalRuns}回計測`}
             </em>
           </div>
         </div>
@@ -690,23 +682,23 @@ function CompareStage({
     <div className="compare-stage">
       <section className="compare-heading">
         <div>
-          <span>RESULT / HTTPが耐えた上限を比較</span>
-          <h2>止める位置で、サービス維持限界はどこまで変わったか。</h2>
+          <span>計測結果</span>
+          <h2>破棄位置ごとの最大ppsを比較</h2>
         </div>
         <p>
-          各条件で、成功率{formatNumber(minSuccessPercent)}%以上かつp95{" "}
-          {formatNumber(maxP95LatencyMs)}ms以下を満たした実送信量を比較します。
-          CPUの小ささだけを勝敗にはしません。
+          各条件で、HTTP成功率{formatNumber(minSuccessPercent)}%以上かつp95{" "}
+          {formatNumber(maxP95LatencyMs)}ms以下を満たした最大ppsを比較します。
+          CPU使用率は、結果を解釈するための参考値です。
         </p>
       </section>
 
-      <div className="comparison-table" role="table" aria-label="停止位置ごとの実測比較">
+      <div className="comparison-table" role="table" aria-label="破棄位置ごとの実測比較">
         <div className="comparison-row comparison-row--head" role="row">
-          <span role="columnheader">捨てた場所</span>
-          <span role="columnheader">HTTPを維持できた上限</span>
+          <span role="columnheader">破棄した場所</span>
+          <span role="columnheader">基準を満たした最大pps</span>
           <span role="columnheader">上限時のHTTP</span>
-          <span role="columnheader">上限時のCPU</span>
-          <span role="columnheader">省けた受信経路</span>
+          <span role="columnheader">上限時のCPU使用率</span>
+          <span role="columnheader">省けた受信処理</span>
         </div>
         {summaries.map((summary, index) => {
           const limit = summary.limitResult;
@@ -739,14 +731,14 @@ function CompareStage({
                 <strong>
                   {limit ? `${formatNumber(limit.cpuPercent, 1)}%` : "—"}
                 </strong>
-                <small>CPU busy</small>
+                <small>CPU使用率</small>
               </span>
               <span role="cell">
                 {summary.dropPoint === "application"
-                  ? "なし。アプリまで運ぶ"
+                  ? "なし（アプリまで処理）"
                   : summary.dropPoint === "netfilter"
-                    ? "アプリへ運ぶ処理"
-                    : "通常のOS受信処理とアプリ"}
+                    ? "アプリへの受信処理"
+                    : "通常のLinux受信処理とアプリ"}
               </span>
             </div>
           );
@@ -758,13 +750,13 @@ function CompareStage({
           <small>あなたの予想</small>
           {predictionLabel(prediction)}
           <i>→</i>
-          <small>実測の最大値</small>
+          <small>実測で最大</small>
           {predictionLabel(measuredBest?.dropPoint ?? null)}
         </span>
         <strong>
           {measuredBest && ratio
-            ? `${measuredBest.location}では、Applicationの約${formatNumber(ratio, 1)}倍の負荷までHTTPを維持しました。`
-            : "全rateの計測がそろうと、ここにサービス維持限界を表示します。"}
+            ? `${measuredBest.location}では、Applicationの約${formatNumber(ratio, 1)}倍のppsまで基準を満たしました。`
+            : "すべての負荷条件を計測すると、ここに最大ppsを表示します。"}
         </strong>
       </div>
     </div>
@@ -986,10 +978,10 @@ export default function App() {
       <main className="booth-screen">
         <section className="experiment-question">
           <div>
-            <span>この実験で確かめること</span>
+            <span>実験の問い</span>
             <h1>
-              捨てる位置で、
-              <strong>Webサービスが耐えられる負荷の上限は何倍変わる？</strong>
+              UDPパケットを捨てる位置で、
+              <strong>Webサービスの限界はどれだけ変わる？</strong>
             </h1>
           </div>
           <div className="fixed-condition">
@@ -999,21 +991,22 @@ export default function App() {
               {formatNumber(durationSeconds, 1)}秒 × {repetitions}回
             </strong>
             <strong>
-              {formatPps(firstSweepRate)} → {formatPps(lastSweepRate)} /秒
+              {formatPps(firstSweepRate)} → {formatPps(lastSweepRate)} pps
             </strong>
           </div>
         </section>
 
         <section className="canary-strip">
           <div>
-            <span>サービス維持の基準</span>
+            <span>判定基準</span>
             <strong>
-              成功率 {formatNumber(minSuccessPercent)}%以上 ＋ p95{" "}
+              成功率 {formatNumber(minSuccessPercent)}%以上かつ p95{" "}
               {formatNumber(maxP95LatencyMs)}ms以下
             </strong>
           </div>
           <p>
-            UDP負荷を増やしながら、同じPiのWebサービスへHTTP GETを繰り返す
+            UDPパケットの送信量を増やしながら、同じRaspberry PiのWebサービスへ
+            HTTP GETを繰り返す
           </p>
           <div className={health.success ? "canary-ok" : "canary-ng"}>
             <span>{health.success ? "現在も応答" : "応答なし"}</span>
@@ -1081,7 +1074,9 @@ export default function App() {
             <strong>{PHASES[phase].label}</strong>
           </div>
           {demo && (
-            <p>公開版は画面説明用のサンプルです。実機版ではPiの計測結果だけを表示します。</p>
+            <p>
+              この公開ページの数値はサンプルです。展示ではRaspberry Piの実測値を表示します。
+            </p>
           )}
           <nav aria-label="画面の操作">
             <button
@@ -1134,8 +1129,8 @@ export default function App() {
           >
             <header>
               <div>
-                <span>EXPERIMENT PROTOCOL</span>
-                <h2 id="details-title">「何倍違う」を信じられる実験にする</h2>
+                <span>実験条件</span>
+                <h2 id="details-title">計測方法と判定基準</h2>
               </div>
               <button ref={closeButtonRef} type="button" onClick={closeDetails}>
                 閉じる <kbd>Esc</kbd>
@@ -1143,58 +1138,60 @@ export default function App() {
             </header>
             <div className="details-grid">
               <article>
-                <span>問い</span>
-                <h3>サービス維持限界を探す</h3>
+                <span>判定方法</span>
+                <h3>基準を満たした最大pps</h3>
                 <p>
                   {formatPps(firstSweepRate)}から{formatPps(lastSweepRate)} ppsまで
-                  負荷を上げ、HTTP成功率{formatNumber(minSuccessPercent)}%以上かつ
-                  p95 {formatNumber(maxP95LatencyMs)}ms以下を満たしたrateを比較します。
+                  送信量を上げ、HTTP成功率{formatNumber(minSuccessPercent)}%以上かつ
+                  p95 {formatNumber(maxP95LatencyMs)}ms以下となった最大ppsを比較します。
                 </p>
               </article>
               <article>
-                <span>変えるもの</span>
-                <h3>負荷量と停止位置</h3>
+                <span>比較する条件</span>
+                <h3>送信量と破棄位置</h3>
                 <p>
-                  payload、各runの時間、HTTPの宛先、合格基準は固定。
-                  Application / nftables / XDPだけを同じrateで比べます。
+                  payload、1回の計測時間、HTTPの宛先、判定基準を固定し、
+                  Application / nftables / XDPを同じ送信量で比べます。
                 </p>
               </article>
               <article>
-                <span>順序の偏り</span>
-                <h3>条件を回し、rateを往復</h3>
+                <span>実行順の偏り</span>
+                <h3>条件の順番を入れ替える</h3>
                 <p>
-                  反復ごとに3条件の開始位置を回し、rateは昇順と降順を交互にして、
-                  熱や実行順の影響を減らします。
+                  反復ごとに3条件の開始位置をずらし、送信量は昇順と降順を
+                  交互にします。熱や実行順による偏りを抑えます。
                 </p>
               </article>
               <article>
-                <span>サービス</span>
-                <h3>HTTP成功率とp95</h3>
+                <span>HTTPの計測</span>
+                <h3>成功率とp95</h3>
                 <p>
-                  負荷中に約200ms間隔で同じURLを確認。平均では隠れる遅い応答を
-                  見逃さないよう95パーセンタイルを記録します。
+                  負荷中は約200ms間隔で同じURLへリクエストを送り、成功率と
+                  応答時間の95パーセンタイルを記録します。
                 </p>
               </article>
               <article>
-                <span>負荷の成立条件</span>
-                <h3>目標ppsを本当に送れたか</h3>
+                <span>送信量の確認</span>
+                <h3>目標ppsに達したか</h3>
                 <p>
-                  送信数と実時間から実送信ppsを計算。目標の
-                  {representative?.sweep?.min_load_delivery_percent ?? 90}%未満なら、
-                  「測定不成立」にします。CPUとNET_RXは理由を読む補助値です。
+                  送信数と実時間から実送信ppsを計算し、目標の
+                  {representative?.sweep?.min_load_delivery_percent ?? 90}%未満なら
+                  「測定不成立」とします。CPU使用率とNET_RXは、結果を
+                  解釈するための参考値です。
                 </p>
               </article>
               <article>
-                <span>適用範囲</span>
-                <h3>捨てる対象は事前に既知</h3>
+                <span>この実験の範囲</span>
+                <h3>破棄対象が分かっている通信</h3>
                 <p>
-                  この実験は防御製品ではありません。入口ほど判断材料は少なく、
-                  アプリの文脈が必要な通信は同じ方法では判定できません。
+                  この実験は防御製品の評価ではありません。入口に近いほど
+                  使える判断材料は少なく、アプリの文脈が必要な通信は
+                  同じ方法で判定できません。
                 </p>
               </article>
             </div>
             <div className="environment-strip">
-              <span>RECORDED ENVIRONMENT</span>
+              <span>計測環境</span>
               <dl>
                 <div>
                   <dt>Receiver</dt>
