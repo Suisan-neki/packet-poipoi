@@ -110,12 +110,18 @@ impl ServiceHealthSummary {
 pub struct SweepPlan {
     pub pps_steps: Vec<u64>,
     pub repetitions: u16,
+    /// 送信側が目標rateを実際に出せたとみなす最低割合。
+    #[serde(default = "default_min_load_delivery_percent")]
+    pub min_load_delivery_percent: u8,
 }
 
 impl SweepPlan {
     fn validate(&self, target_pps: u64) -> Result<(), ExperimentRunError> {
         if self.repetitions == 0 {
             return Err(ExperimentRunError::ZeroSweepRepetitions);
+        }
+        if !(1..=100).contains(&self.min_load_delivery_percent) {
+            return Err(ExperimentRunError::InvalidLoadDeliveryThreshold);
         }
         if self.pps_steps.is_empty()
             || self.pps_steps.iter().any(|pps| *pps == 0)
@@ -128,6 +134,10 @@ impl SweepPlan {
         }
         Ok(())
     }
+}
+
+const fn default_min_load_delivery_percent() -> u8 {
+    90
 }
 
 /// 1条件ぶんの再現可能な実測結果。
@@ -168,6 +178,32 @@ impl ExperimentRun {
             return 0.0;
         }
         self.net_rx_softirq_delta as f32 * 10_000.0 / self.packets_sent as f32
+    }
+
+    /// 設定値ではなく、計測時間と送信数から求めた実送信rate。
+    pub fn actual_pps(&self) -> f32 {
+        if self.duration_ms == 0 {
+            return 0.0;
+        }
+        self.packets_sent as f32 * 1_000.0 / self.duration_ms as f32
+    }
+
+    /// 目標rateに対して、送信側が実際に出せた割合。
+    pub fn load_delivery_percent(&self) -> f32 {
+        if self.target_pps == 0 {
+            return 0.0;
+        }
+        self.actual_pps() * 100.0 / self.target_pps as f32
+    }
+
+    /// 送信側の限界を、受信側サービスの限界と誤認しないための判定。
+    pub fn load_rate_achieved(&self) -> bool {
+        match &self.sweep {
+            Some(sweep) => {
+                self.load_delivery_percent() >= f32::from(sweep.min_load_delivery_percent)
+            }
+            None => true,
+        }
     }
 
     pub fn validate(&self) -> Result<(), ExperimentRunError> {
@@ -238,6 +274,7 @@ pub enum ExperimentRunError {
     ZeroHealthLatencyThreshold,
     HealthP95ExceedsMaximum,
     ZeroSweepRepetitions,
+    InvalidLoadDeliveryThreshold,
     InvalidSweepSteps,
     TargetMissingFromSweep,
     RepetitionExceedsSweep,
@@ -323,7 +360,36 @@ mod tests {
         sweep_run.sweep = Some(SweepPlan {
             pps_steps: vec![500, 2_000, 5_000],
             repetitions: 3,
+            min_load_delivery_percent: 90,
         });
         assert_eq!(sweep_run.validate(), Ok(()));
+    }
+
+    #[test]
+    fn records_actual_load_instead_of_trusting_the_target() {
+        let mut measured = run(DropPoint::Application);
+        measured.duration_ms = 10_000;
+        measured.target_pps = 2_000;
+        measured.packets_sent = 18_000;
+        measured.sweep = Some(SweepPlan {
+            pps_steps: vec![500, 2_000, 5_000],
+            repetitions: 3,
+            min_load_delivery_percent: 90,
+        });
+        measured.service_health = Some(ServiceHealthSummary {
+            checks: 50,
+            successes: 50,
+            latency_p95_ms: 20,
+            latency_max_ms: 25,
+            min_success_percent: 99.0,
+            max_p95_latency_ms: 100,
+        });
+
+        assert_eq!(measured.actual_pps(), 1_800.0);
+        assert_eq!(measured.load_delivery_percent(), 90.0);
+        assert!(measured.load_rate_achieved());
+
+        measured.packets_sent = 17_999;
+        assert!(!measured.load_rate_achieved());
     }
 }

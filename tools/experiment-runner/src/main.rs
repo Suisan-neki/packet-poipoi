@@ -11,7 +11,7 @@ use std::io::Write as _;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UdpSocket};
 
@@ -53,6 +53,9 @@ struct Opt {
     /// HTTP p95 latencyがこの値以下ならサービス維持と判定する。
     #[arg(long, default_value_t = 100)]
     service_max_p95_ms: u64,
+    /// 目標ppsのうち、実際に送れた割合がこの値未満なら測定未成立とする。
+    #[arg(long, default_value_t = 90)]
+    min_load_delivery_percent: u8,
     /// nftablesで遮断するUDP宛先port。
     #[arg(long, default_value_t = 4000)]
     udp_port: u16,
@@ -119,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
     if opt.duration_secs == 0
         || opt.repetitions == 0
         || opt.service_max_p95_ms == 0
+        || !(1..=100).contains(&opt.min_load_delivery_percent)
         || !opt.service_min_success_percent.is_finite()
         || !(0.0..=100.0).contains(&opt.service_min_success_percent)
     {
@@ -128,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
     let sweep = SweepPlan {
         pps_steps: pps_steps.clone(),
         repetitions: opt.repetitions,
+        min_load_delivery_percent: opt.min_load_delivery_percent,
     };
 
     let received = Arc::new(AtomicU64::new(0));
@@ -151,6 +156,10 @@ async fn main() -> anyhow::Result<()> {
     println!(
         "service maintained = success >= {:.1}% and p95 <= {}ms",
         opt.service_min_success_percent, opt.service_max_p95_ms,
+    );
+    println!(
+        "load measurement valid = actual rate >= {}% of target",
+        opt.min_load_delivery_percent,
     );
 
     let experiment_result: anyhow::Result<()> = async {
@@ -177,13 +186,16 @@ async fn main() -> anyhow::Result<()> {
                         .as_ref()
                         .context("sweep result is missing service health")?;
                     println!(
-                        "{} {:>6}pps r{}: HTTP={:.1}% p95={}ms maintained={} cpu={:.1}% NET_RX={}",
+                        "{} target={:>6}pps actual={:>7.0}pps ({:>5.1}%) r{}: HTTP={:.1}% p95={}ms maintained={} load_valid={} cpu={:.1}% NET_RX={}",
                         drop_point.as_str(),
                         target_pps,
+                        run.actual_pps(),
+                        run.load_delivery_percent(),
                         repetition,
                         health.success_percent(),
                         health.latency_p95_ms,
                         health.service_maintained(),
+                        run.load_rate_achieved(),
                         run.cpu_busy_percent,
                         run.net_rx_softirq_delta
                     );
@@ -269,8 +281,11 @@ async fn run_condition(
     let softirq_before = read_net_rx_softirq()?;
 
     let traffic_before = start_traffic(&opt.traffic_control, target_pps).await?;
+    let measurement_started = Instant::now();
     tokio::time::sleep(Duration::from_secs(opt.duration_secs)).await;
     traffic_command(&opt.traffic_control, "stop").await?;
+    let duration_ms =
+        u64::try_from(measurement_started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let cpu_after = read_cpu_snapshot()?;
     let softirq_after = read_net_rx_softirq()?;
@@ -302,7 +317,7 @@ async fn run_condition(
         run_id,
         repetition,
         drop_point,
-        duration_ms: opt.duration_secs.saturating_mul(1_000),
+        duration_ms,
         target_pps,
         payload_bytes: traffic_before.payload_bytes,
         packets_sent: traffic_after

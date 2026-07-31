@@ -19,6 +19,7 @@ service limitへ与える効果量を測る。
 - repetitions: 3 per rate and drop point
 - service probe: Pi AからPi Bの`GET /api/ping`、default interval 200ms
 - service threshold: success rate >= 99%、p95 latency <= 100ms
+- load validity: actual send rate >= 90% of target rate
 
 CLIで値を変えた場合は、`SweepPlan`と`ServiceHealthSummary`へ実値を保存する。
 runnerはPi Bのmodel、kernel、interface、MTU、CPU governorと、
@@ -53,7 +54,8 @@ XDPのactual attach modeもrunごとに保存する。
 5. 負荷中に同じHTTP endpointを繰り返しprobeする
 6. duration終了後にUDPを停止し、停止直前に始まったprobeの完了を待つ
 7. 停止後に始まったprobeは除外し、送信数とHTTP集計を取得する
-8. Pi Bのcounter差分と環境情報を`experiment_run`としてpublishする
+8. 実計測時間と送信数からactual ppsを計算し、目標rateを出せたか判定する
+9. Pi Bのcounter差分と環境情報を`experiment_run`としてpublishする
 
 HTTP probeがreset前に開始していた場合、generationが異なるため当該runへ混ぜない。
 
@@ -86,11 +88,26 @@ HTTP success % >= configured minimum
 HTTP latency p95 <= configured maximum
 ```
 
-同じrate・drop pointのrunは多数決でpass / failを決める。
-そのdrop pointでpassした最大のtested rateを`max maintained pps`とする。
+同じrate・drop pointのrunは多数決でpass / failを決める。ただし、全runで
+actual ppsがtarget ppsの設定割合以上に達したrateだけを有効とする。
+
+`max maintained pps`は、最小rateから連続してpassした最後のrateにおける
+actual ppsの中央値とする。途中でfailした後に高いrateがpassした場合は、
+最大値だけを採用せず非単調な結果として再測定する。
 
 rate sweepは離散値なので、真の限界は「最大pass rate以上、次のfail rate未満」の範囲にある。
 結果では未計測の中間値を補間しない。
+
+### Actual send rate
+
+送信側Piの処理限界を、受信側サービスの限界と誤認しないために次を計算する。
+
+```text
+actual pps = packets sent / measured duration
+load delivery % = actual pps / target pps × 100
+```
+
+defaultでは90%未満を`測定不成立`とし、service limitへ含めない。
 
 ## 補助指標
 
@@ -125,6 +142,7 @@ dashboardでは実送信packet数で1万packetあたりへ正規化する。
 - cumulative counterをrun結果として使わない
 - fixtureと実測streamをbadgeで区別する
 - target rateだけでなく実送信数を保存する
+- 設定時間ではなくstart応答からstop応答までの実時間を保存する
 - Pi model / kernel / interface / MTU / governorをrunへ保存する
 
 ## cleanup
