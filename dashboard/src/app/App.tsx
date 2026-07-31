@@ -30,6 +30,7 @@ interface ServiceHealthSummary {
 interface SweepPlan {
   pps_steps: number[];
   repetitions: number;
+  min_load_delivery_percent?: number;
 }
 
 interface ExperimentRun {
@@ -59,6 +60,8 @@ interface HarborEvent extends Partial<ExperimentRun> {
 
 interface RateSummary {
   targetPps: number;
+  actualPps: number;
+  loadDeliveryPercent: number;
   cpuPercent: number;
   softirqPer10k: number;
   appReceivePercent: number;
@@ -66,6 +69,7 @@ interface RateSummary {
   latencyP95Ms: number;
   runs: number;
   maintained: boolean;
+  status: "maintained" | "failed" | "unverified";
 }
 
 interface ConditionSummary {
@@ -77,6 +81,7 @@ interface ConditionSummary {
   limitResult: RateSummary | null;
   totalRuns: number;
   attachMode: string;
+  nonMonotonic: boolean;
 }
 
 interface HealthState {
@@ -218,6 +223,7 @@ const FIXTURE_RUNS: ExperimentRun[] = DROP_POINTS.flatMap(dropPoint =>
         sweep: {
           pps_steps: SAMPLE_PPS_STEPS,
           repetitions: SAMPLE_REPETITIONS,
+          min_load_delivery_percent: 90,
         },
       };
     }),
@@ -264,6 +270,21 @@ function serviceMaintained(health?: ServiceHealthSummary) {
   );
 }
 
+function actualPps(run: ExperimentRun) {
+  if (run.duration_ms <= 0) return 0;
+  return run.packets_sent * 1_000 / run.duration_ms;
+}
+
+function loadDeliveryPercent(run: ExperimentRun) {
+  if (run.target_pps <= 0) return 0;
+  return actualPps(run) * 100 / run.target_pps;
+}
+
+function loadRateAchieved(run: ExperimentRun) {
+  const threshold = run.sweep?.min_load_delivery_percent ?? 90;
+  return loadDeliveryPercent(run) >= threshold;
+}
+
 function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
   return DROP_POINTS.map(dropPoint => {
     const conditionRuns = runs.filter(run => run.drop_point === dropPoint);
@@ -272,11 +293,20 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
     ].sort((a, b) => a - b);
     const rates = ppsSteps.map(targetPps => {
       const rateRuns = conditionRuns.filter(run => run.target_pps === targetPps);
-      const maintainedRuns = rateRuns.filter(run =>
+      const validRuns = rateRuns.filter(loadRateAchieved);
+      const maintainedRuns = validRuns.filter(run =>
         serviceMaintained(run.service_health),
       ).length;
+      const loadValid =
+        rateRuns.length > 0 && validRuns.length === rateRuns.length;
+      const maintained =
+        loadValid &&
+        validRuns.length > 0 &&
+        maintainedRuns * 2 > validRuns.length;
       return {
         targetPps,
+        actualPps: median(rateRuns.map(actualPps)),
+        loadDeliveryPercent: median(rateRuns.map(loadDeliveryPercent)),
         cpuPercent: median(rateRuns.map(run => run.cpu_busy_percent)),
         softirqPer10k: median(
           rateRuns.map(run =>
@@ -299,12 +329,23 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
           rateRuns.map(run => run.service_health?.latency_p95_ms ?? 0),
         ),
         runs: rateRuns.length,
-        maintained:
-          rateRuns.length > 0 && maintainedRuns * 2 >= rateRuns.length,
+        maintained,
+        status: !loadValid
+          ? "unverified" as const
+          : maintained
+            ? "maintained" as const
+            : "failed" as const,
       };
     });
-    const maintainedRates = rates.filter(rate => rate.maintained);
-    const limitResult = maintainedRates.at(-1) ?? null;
+    const firstNonMaintained = rates.findIndex(rate => !rate.maintained);
+    const maintainedPrefix =
+      firstNonMaintained === -1
+        ? rates
+        : rates.slice(0, firstNonMaintained);
+    const limitResult = maintainedPrefix.at(-1) ?? null;
+    const nonMonotonic =
+      firstNonMaintained !== -1 &&
+      rates.slice(firstNonMaintained + 1).some(rate => rate.maintained);
     return {
       dropPoint,
       label:
@@ -320,10 +361,11 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
             ? "nftables"
             : "XDP",
       rates,
-      maxMaintainedPps: limitResult?.targetPps ?? null,
+      maxMaintainedPps: limitResult?.actualPps ?? null,
       limitResult,
       totalRuns: conditionRuns.length,
       attachMode: conditionRuns.at(-1)?.xdp_attach_mode ?? "unknown",
+      nonMonotonic,
     };
   });
 }
@@ -363,15 +405,27 @@ function ShipMark() {
   );
 }
 
-function LayerPath({ dropPoint }: { dropPoint: DropPoint }) {
+function LayerPath({
+  dropPoint,
+  rates,
+  payloadBytes,
+}: {
+  dropPoint: DropPoint;
+  rates: RateSummary[];
+  payloadBytes: number;
+}) {
   const stopIndex =
     dropPoint === "xdp" ? 1 : dropPoint === "netfilter" ? 3 : 4;
+  const firstRate = rates.at(0)?.targetPps ?? SAMPLE_PPS_STEPS[0];
+  const lastRate = rates.at(-1)?.targetPps ?? SAMPLE_PPS_STEPS.at(-1) ?? 0;
   return (
     <div className={`layer-path layer-path--${dropPoint}`}>
       <div className="packet-source">
         <span>実験用UDPを増やす</span>
-        <strong>500 → 50,000 /秒</strong>
-        <em>128 byte · 宛先 :4000</em>
+        <strong>
+          {formatPps(firstRate)} → {formatPps(lastRate)} /秒
+        </strong>
+        <em>{payloadBytes} byte · 宛先 :4000</em>
       </div>
       <div className="layer-sequence" aria-label="Linuxの受信経路">
         {LAYERS.map((layer, index) => {
@@ -470,28 +524,46 @@ function PredictionIntro({
   );
 }
 
-function LoadSweep({ summary }: { summary: ConditionSummary }) {
+function LoadSweep({
+  summary,
+  minSuccessPercent,
+  maxP95LatencyMs,
+}: {
+  summary: ConditionSummary;
+  minSuccessPercent: number;
+  maxP95LatencyMs: number;
+}) {
   return (
     <div className="load-sweep">
       <header>
         <span>LOAD SWEEP / 送信量を段階的に上げる</span>
         <strong>
-          HTTP成功率 99%以上 ＋ p95 100ms以下なら「維持」
+          HTTP成功率 {formatNumber(minSuccessPercent)}%以上 ＋ p95{" "}
+          {formatNumber(maxP95LatencyMs)}ms以下なら「維持」
         </strong>
       </header>
-      <div className="rate-steps">
+      <div
+        className="rate-steps"
+        style={{
+          "--rate-count": Math.max(summary.rates.length, 1),
+        } as CSSProperties}
+      >
         {summary.rates.map(rate => (
           <div
-            className={`rate-step ${
-              rate.maintained ? "is-maintained" : "is-failed"
-            }`}
+            className={`rate-step is-${rate.status}`}
             key={rate.targetPps}
           >
-            <small>{formatPps(rate.targetPps)} /秒</small>
-            <strong>{rate.maintained ? "維持" : "限界超え"}</strong>
+            <small>目標 {formatPps(rate.targetPps)} /秒</small>
+            <strong>
+              {rate.status === "maintained"
+                ? "維持"
+                : rate.status === "failed"
+                  ? "限界超え"
+                  : "測定不成立"}
+            </strong>
             <span>
-              HTTP {formatNumber(rate.successPercent)}% · p95{" "}
-              {formatNumber(rate.latencyP95Ms)}ms
+              実測 {formatPps(rate.actualPps)} /秒 · HTTP{" "}
+              {formatNumber(rate.successPercent)}%
             </span>
           </div>
         ))}
@@ -503,9 +575,15 @@ function LoadSweep({ summary }: { summary: ConditionSummary }) {
 function ConditionStage({
   dropPoint,
   summary,
+  payloadBytes,
+  minSuccessPercent,
+  maxP95LatencyMs,
 }: {
   dropPoint: DropPoint;
   summary: ConditionSummary;
+  payloadBytes: number;
+  minSuccessPercent: number;
+  maxP95LatencyMs: number;
 }) {
   const copy = CONDITION_COPY[dropPoint];
   const limit = summary.limitResult;
@@ -521,7 +599,13 @@ function ConditionStage({
             {formatPps(summary.maxMaintainedPps)}
             <em> packets / 秒</em>
           </strong>
+          <span>送信数と計測時間から求めた実測値</span>
         </div>
+        {summary.nonMonotonic && (
+          <div className="measurement-warning">
+            pass / failが負荷順に並びません。再測定が必要です。
+          </div>
+        )}
         <div className="look-here">
           <small>この画面で見るところ</small>
           <strong>{copy.focus}</strong>
@@ -529,27 +613,35 @@ function ConditionStage({
       </section>
 
       <section className="stage-path">
-        <LayerPath dropPoint={dropPoint} />
-        <LoadSweep summary={summary} />
+        <LayerPath
+          dropPoint={dropPoint}
+          rates={summary.rates}
+          payloadBytes={payloadBytes}
+        />
+        <LoadSweep
+          summary={summary}
+          minSuccessPercent={minSuccessPercent}
+          maxP95LatencyMs={maxP95LatencyMs}
+        />
         <div className="condition-metrics">
           <div>
             <small>耐えられた上限</small>
             <strong>{formatPps(summary.maxMaintainedPps)} pps</strong>
-            <em>条件内の最大pass</em>
+            <em>低いrateから連続した最大pass</em>
           </div>
           <div>
             <small>上限時のHTTP成功率</small>
             <strong>
               {limit ? `${formatNumber(limit.successPercent, 0)}%` : "—"}
             </strong>
-            <em>基準 99%以上</em>
+            <em>基準 {formatNumber(minSuccessPercent)}%以上</em>
           </div>
           <div>
             <small>上限時の応答時間 p95</small>
             <strong>
               {limit ? `${formatNumber(limit.latencyP95Ms)} ms` : "—"}
             </strong>
-            <em>基準 100ms以下</em>
+            <em>基準 {formatNumber(maxP95LatencyMs)}ms以下</em>
           </div>
           <div>
             <small>上限時のCPU busy</small>
@@ -571,9 +663,13 @@ function ConditionStage({
 function CompareStage({
   summaries,
   prediction,
+  minSuccessPercent,
+  maxP95LatencyMs,
 }: {
   summaries: ConditionSummary[];
   prediction: DropPoint | null;
+  minSuccessPercent: number;
+  maxP95LatencyMs: number;
 }) {
   const measured = summaries.filter(summary => summary.maxMaintainedPps != null);
   const measuredBest = measured.reduce<ConditionSummary | null>(
@@ -598,8 +694,9 @@ function CompareStage({
           <h2>止める位置で、サービス維持限界はどこまで変わったか。</h2>
         </div>
         <p>
-          各条件で、成功率99%以上かつp95 100ms以下を最後に満たした
-          UDP送信量を比較します。CPUの小ささだけを勝敗にはしません。
+          各条件で、成功率{formatNumber(minSuccessPercent)}%以上かつp95{" "}
+          {formatNumber(maxP95LatencyMs)}ms以下を満たした実送信量を比較します。
+          CPUの小ささだけを勝敗にはしません。
         </p>
       </section>
 
@@ -628,7 +725,7 @@ function CompareStage({
               </span>
               <span className="metric-cell" role="cell">
                 <strong>{formatPps(summary.maxMaintainedPps)} pps</strong>
-                <small>最大pass rate</small>
+                <small>実送信ppsの中央値</small>
               </span>
               <span className="metric-cell" role="cell">
                 <strong>
@@ -708,6 +805,15 @@ export default function App() {
   const sweepSteps = representative?.sweep?.pps_steps ?? SAMPLE_PPS_STEPS;
   const repetitions =
     representative?.sweep?.repetitions ?? SAMPLE_REPETITIONS;
+  const payloadBytes = representative?.payload_bytes ?? 128;
+  const durationSeconds = (representative?.duration_ms ?? 10_000) / 1_000;
+  const minSuccessPercent =
+    representative?.service_health?.min_success_percent ?? 99;
+  const maxP95LatencyMs =
+    representative?.service_health?.max_p95_latency_ms ?? 100;
+  const firstSweepRate = sweepSteps.at(0) ?? SAMPLE_PPS_STEPS[0];
+  const lastSweepRate =
+    sweepSteps.at(-1) ?? SAMPLE_PPS_STEPS.at(-1) ?? firstSweepRate;
 
   function choosePhase(next: number) {
     manualPhaseRef.current = true;
@@ -888,16 +994,23 @@ export default function App() {
           </div>
           <div className="fixed-condition">
             <small>全条件で同じ</small>
-            <strong>128 byte</strong>
-            <strong>10秒 × 3回</strong>
-            <strong>500 → 50k /秒</strong>
+            <strong>{payloadBytes} byte</strong>
+            <strong>
+              {formatNumber(durationSeconds, 1)}秒 × {repetitions}回
+            </strong>
+            <strong>
+              {formatPps(firstSweepRate)} → {formatPps(lastSweepRate)} /秒
+            </strong>
           </div>
         </section>
 
         <section className="canary-strip">
           <div>
             <span>サービス維持の基準</span>
-            <strong>成功率 99%以上 ＋ p95 100ms以下</strong>
+            <strong>
+              成功率 {formatNumber(minSuccessPercent)}%以上 ＋ p95{" "}
+              {formatNumber(maxP95LatencyMs)}ms以下
+            </strong>
           </div>
           <p>
             UDP負荷を増やしながら、同じPiのWebサービスへHTTP GETを繰り返す
@@ -942,9 +1055,17 @@ export default function App() {
             <ConditionStage
               dropPoint={activeDropPoint}
               summary={activeSummary}
+              payloadBytes={payloadBytes}
+              minSuccessPercent={minSuccessPercent}
+              maxP95LatencyMs={maxP95LatencyMs}
             />
           ) : (
-            <CompareStage summaries={summaries} prediction={prediction} />
+            <CompareStage
+              summaries={summaries}
+              prediction={prediction}
+              minSuccessPercent={minSuccessPercent}
+              maxP95LatencyMs={maxP95LatencyMs}
+            />
           )}
           {showPrediction && (
             <PredictionIntro
@@ -1025,8 +1146,9 @@ export default function App() {
                 <span>問い</span>
                 <h3>サービス維持限界を探す</h3>
                 <p>
-                  500から50,000 ppsまで負荷を上げ、HTTP成功率99%以上かつ
-                  p95 100ms以下を最後に満たしたrateを比較します。
+                  {formatPps(firstSweepRate)}から{formatPps(lastSweepRate)} ppsまで
+                  負荷を上げ、HTTP成功率{formatNumber(minSuccessPercent)}%以上かつ
+                  p95 {formatNumber(maxP95LatencyMs)}ms以下を満たしたrateを比較します。
                 </p>
               </article>
               <article>
@@ -1054,11 +1176,12 @@ export default function App() {
                 </p>
               </article>
               <article>
-                <span>kernel work</span>
-                <h3>CPUとNET_RXも記録</h3>
+                <span>負荷の成立条件</span>
+                <h3>目標ppsを本当に送れたか</h3>
                 <p>
-                  /proc/statのbusy率とNET_RX softirq差分を保存し、
-                  サービス限界が動いた理由を低レイヤの仕事量から読めるようにします。
+                  送信数と実時間から実送信ppsを計算。目標の
+                  {representative?.sweep?.min_load_delivery_percent ?? 90}%未満なら、
+                  「測定不成立」にします。CPUとNET_RXは理由を読む補助値です。
                 </p>
               </article>
               <article>
