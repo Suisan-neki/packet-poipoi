@@ -56,9 +56,10 @@ HTTP GET ───────────────────────�
 
 | 指標 | 役割 |
 | --- | --- |
-| 最大維持負荷（pps） | HTTPの基準を最後に満たしたUDP送信量。3条件の勝敗を決める主結果 |
+| 最大維持負荷（pps） | 低いrateから連続してHTTP基準を満たした、実送信ppsの中央値。3条件の主結果 |
 | HTTP成功率 | 負荷中のGETが成功した割合。99%以上が合格 |
 | HTTP p95 latency | 遅い側5%の境目。100ms以下が合格 |
+| 負荷到達率 | 目標ppsを送信側Piが本当に出せたか。90%未満は「測定不成立」 |
 | CPU busy | サービス限界が動いた理由を読む補助指標 |
 | NET_RX softirq | Linuxが行った受信処理量を読む補助指標 |
 | Application到達率 | 指定した場所で実際にUDPを止められたかの確認 |
@@ -66,6 +67,7 @@ HTTP GET ───────────────────────�
 各rate・各停止位置を3回ずつ測ります。条件の開始位置を反復ごとに回し、
 rateは昇順と降順を交互にして、熱や実行順の偏りを減らします。
 Piの型、kernel、interface、MTU、CPU governor、XDP attach modeもrunへ保存します。
+高いrateで送信側Piが先に限界へ達した場合は、受信側サービスの限界として扱いません。
 
 ## デモの見方
 
@@ -76,7 +78,7 @@ Dashboardはスクロールせず、4画面を順に追います。
 3. XDPで捨てたときの負荷上限
 4. 3条件の最大維持負荷を比較
 
-各条件の画面では、負荷を上げた6段階を「維持 / 限界超え」で表示します。
+各条件の画面では、負荷を上げた6段階を「維持 / 限界超え / 測定不成立」で表示します。
 最後の画面では、CPUの小ささではなく、HTTPが耐えた最大ppsを横並びにします。
 
 ## システム構成
@@ -166,7 +168,8 @@ sudo cargo run --release --manifest-path tools/Cargo.toml -p experiment-runner -
   --duration-secs 10 \
   --repetitions 3 \
   --service-min-success-percent 99 \
-  --service-max-p95-ms 100
+  --service-max-p95-ms 100 \
+  --min-load-delivery-percent 90
 ```
 
 ### 5. Dashboard
@@ -188,6 +191,8 @@ npm run tauri dev
 - 現在のparserはEthernet上のIPv4を対象とし、IPv6、VLAN、fragment、IP optionsには対応していません。
 - `generic` XDPと`native` XDPは同じ結果として混ぜません。
 - CPU busyとNET_RXはbackground process、thermal throttling、NIC、driverの影響を受けます。
+- 目標rateの90%を送れなかったrunは測定不成立とし、サービス維持限界へ含めません。
+- pass / failが負荷順に並ばない場合は上限を断定せず、再測定します。
 - rate sweepは試した段階の間にある厳密な限界値までは特定しません。
 - 1台のPiで得た結果を、すべてのmachineやworkloadへ一般化しません。
 - Control APIに認証はありません。外部へ公開しないでください。
