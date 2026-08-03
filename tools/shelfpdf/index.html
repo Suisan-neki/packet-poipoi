@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="画像・CBZ・DRMフリーEPUBをブラウザだけでPDF化するローカル処理Webアプリ">
+  <meta name="theme-color" content="#2857d9">
+  <title>ShelfPDF Web</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js" integrity="sha512-+EeCylkt9WHJk5tGJxYdecHOcXFRME7qnbsfeMsdQL6NUPYm2+uGFmyleEqsmVoap/f3dN/sc3BX9t9kHXkHHg==" crossorigin="anonymous"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">Browser-only converter</div>
+        <h1>ShelfPDF Web</h1>
+        <p>ファイルはブラウザ内だけで処理します。画像・CBZはPDFを直接生成し、DRMフリーEPUBは印刷用プレビューを作って「PDFとして保存」できます。</p>
+      </div>
+      <div class="local-badge">アップロードなし</div>
+    </header>
+
+    <nav class="tabs card" aria-label="変換方式">
+      <button class="tab" type="button" role="tab" aria-selected="true" data-tab="images">画像・CBZ → PDF</button>
+      <button class="tab" type="button" role="tab" aria-selected="false" data-tab="epub">EPUB → 印刷・PDF</button>
+    </nav>
+
+    <section class="panel card" id="images-panel" role="tabpanel">
+      <div class="panel-grid">
+        <div>
+          <div class="drop-zone" id="imageDrop">
+            <div>
+              <strong>画像またはCBZをここへ</strong>
+              <p>PNG、JPEG、WebP、GIF、CBZに対応。複数画像はファイル名の自然順で並びます。</p>
+              <button class="secondary" id="chooseImages" type="button">ファイルを選択</button>
+              <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.cbz,.zip" multiple hidden>
+            </div>
+          </div>
+          <div class="file-list" id="imageFiles" aria-live="polite"></div>
+        </div>
+        <aside class="options">
+          <h2>PDF設定</h2>
+          <div class="field"><label for="imagePageSize">用紙</label><select id="imagePageSize"><option value="a4">A4</option><option value="a5">A5</option><option value="letter">Letter</option></select></div>
+          <div class="field"><label for="imageMargin">余白</label><select id="imageMargin"><option value="0">0 mm</option><option value="5" selected>5 mm</option><option value="10">10 mm</option><option value="15">15 mm</option></select></div>
+          <div class="field"><label for="imageQuality">JPEG品質 <span id="qualityValue">90</span></label><input id="imageQuality" type="range" min="60" max="100" value="90"></div>
+          <label class="checkbox"><input id="autoCrop" type="checkbox"><span>周囲の単色余白を推定して除去する</span></label>
+          <div class="actions"><button class="primary" id="makeImagePdf" type="button" disabled>PDFを作成</button><button class="ghost" id="clearImages" type="button">クリア</button></div>
+        </aside>
+      </div>
+      <progress id="imageProgress" max="100" value="0" hidden></progress>
+      <div class="status" id="imageStatus">ファイルを選択してください。</div>
+    </section>
+
+    <section class="panel card" id="epub-panel" role="tabpanel" hidden>
+      <div class="panel-grid">
+        <div>
+          <div class="drop-zone" id="epubDrop">
+            <div>
+              <strong>DRMフリーEPUBをここへ</strong>
+              <p>EPUBをブラウザ内で展開し、章を連結した印刷用プレビューを作ります。</p>
+              <button class="secondary" id="chooseEpub" type="button">EPUBを選択</button>
+              <input id="epubInput" type="file" accept="application/epub+zip,.epub" hidden>
+            </div>
+          </div>
+          <div class="file-list" id="epubFiles"></div>
+        </div>
+        <aside class="options">
+          <h2>印刷設定</h2>
+          <div class="field"><label for="epubPageSize">用紙</label><select id="epubPageSize"><option value="A4">A4</option><option value="A5">A5</option><option value="Letter">Letter</option></select></div>
+          <div class="field"><label for="epubMargin">余白</label><select id="epubMargin"><option value="8">8 mm</option><option value="12" selected>12 mm</option><option value="18">18 mm</option></select></div>
+          <div class="field"><label for="writingMode">組方向</label><select id="writingMode"><option value="auto">EPUBの設定を優先</option><option value="horizontal">横書き</option><option value="vertical">縦書き</option></select></div>
+          <div class="field"><label for="fontScale">文字サイズ <span id="fontScaleValue">100</span>%</label><input id="fontScale" type="range" min="80" max="140" value="100"></div>
+          <div class="actions"><button class="primary" id="prepareEpub" type="button" disabled>プレビューを作成</button><button class="ghost" id="clearEpub" type="button">クリア</button></div>
+        </aside>
+      </div>
+      <progress id="epubProgress" max="100" value="0" hidden></progress>
+      <div class="status" id="epubStatus">EPUBを選択してください。</div>
+      <div class="preview-wrap" id="previewWrap" hidden>
+        <div class="preview-toolbar"><h2 id="previewTitle">印刷プレビュー</h2><button class="primary" id="printEpub" type="button">印刷画面を開く</button></div>
+        <iframe id="epubPreview" title="EPUB印刷プレビュー" sandbox="allow-same-origin"></iframe>
+      </div>
+    </section>
+
+    <div class="notice">暗号化・DRM保護されたKFX、AZW、AZW3、Kindle Unlimited本には対応しません。EPUB内に通常のフォント難読化以外の暗号化が見つかった場合は処理を止めます。</div>
+    <footer>処理は端末内で完結します。外部通信はアプリ本体のJavaScriptライブラリを読み込むときだけ発生し、選択した書籍や画像の内容は送信しません。</footer>
+  </main>
+  <script src="core.js"></script>
+  <script src="ui.js"></script>
+  <script src="images.js"></script>
+  <script src="epub-utils.js"></script>
+  <script src="epub-main.js"></script>
+  <script src="init.js"></script>
+</body>
+</html>
