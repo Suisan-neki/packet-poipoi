@@ -5,9 +5,9 @@
 - Test fixtures: success
 - Browser E2E: success
 - Checks: public page, image-to-PDF download, DRM-free EPUB preview
-- Commit: d356aa2150b04b1469d310081e1ce8f63f8e2457
+- Commit: 48d113b9a2032e12cf22220032be3dba62346726
 - URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/
-- Workflow: https://github.com/Suisan-neki/packet-poipoi/actions/runs/30803947984
+- Workflow: https://github.com/Suisan-neki/packet-poipoi/actions/runs/30804170609
 
 ```text
 --- runtime.log ---
@@ -45,5 +45,4 @@ Chromium Headless Shell 140.0.7339.16 (playwright build v1187) downloaded to /ho
 --- e2e.log ---
 Libraries: {"jszip":true,"jspdf":false}
 ShelfPDF E2E verified: public page, image PDF download, and EPUB preview.
-console.error: Failed to find a valid digest in the 'integrity' attribute for resource 'https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js' with computed SHA-512 integrity 'plOdviVmws4Y3JAvbnpfKb2hVxKM1lCwsi3vmElYRj+tiDLffZ4FVUj5a8vyKJ9pIgl8JCAHEJ4D1iUKBecswg=='. The resource has been blocked.
 ```
