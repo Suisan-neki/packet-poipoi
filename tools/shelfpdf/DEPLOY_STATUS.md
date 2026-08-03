@@ -1,6 +1,6 @@
 # ShelfPDF deployment status
 
 - Status: verified
-- Commit: 37f65bf5bfab77df837713278040daf5d9598616
+- Commit: 6cee8e9fe0291c86da399fcd8fccf603ab5dec40
 - URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/
-- Workflow: https://github.com/Suisan-neki/packet-poipoi/actions/runs/30803008979
+- Workflow: https://github.com/Suisan-neki/packet-poipoi/actions/runs/30803121028
