@@ -62,13 +62,18 @@ jobs:
           node-version: 22
 
       - name: Install browser test runtime
+        id: runtime
+        continue-on-error: true
         run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
+          set -o pipefail
+          npm install --no-save playwright@1.55.0 2>&1 | tee /tmp/runtime.log
+          npx playwright install --with-deps chromium 2>&1 | tee -a /tmp/runtime.log
 
       - name: Create test image and EPUB
+        id: fixtures
+        continue-on-error: true
         run: |
-          python3 - <<'PY'
+          python3 - <<'PY' 2>&1 | tee /tmp/fixtures.log
           import binascii
           import struct
           import zlib
@@ -113,27 +118,64 @@ jobs:
           PY
 
       - name: Verify page and conversions in Chromium
+        id: e2e
+        if: always()
+        continue-on-error: true
         env:
           SHELFPDF_URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/
-        run: node tools/shelfpdf/e2e.mjs
+        run: |
+          set -o pipefail
+          node tools/shelfpdf/e2e.mjs 2>&1 | tee /tmp/e2e.log
 
-      - name: Record verification
+      - name: Record verification result
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
+          FIXTURES_OUTCOME: ${{ steps.fixtures.outcome }}
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
         run: |
-          cat > /tmp/deploy-status.md <<EOF
-          # ShelfPDF deployment status
-
-          - Status: verified
-          - Checks: public page, image-to-PDF download, DRM-free EPUB preview
-          - Commit: ${GITHUB_SHA}
-          - URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/
-          - Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          EOF
+          if [[ "$RUNTIME_OUTCOME" == "success" && "$FIXTURES_OUTCOME" == "success" && "$E2E_OUTCOME" == "success" ]]; then
+            STATUS="verified"
+          else
+            STATUS="failed"
+          fi
+          {
+            echo "# ShelfPDF deployment status"
+            echo
+            echo "- Status: ${STATUS}"
+            echo "- Runtime setup: ${RUNTIME_OUTCOME}"
+            echo "- Test fixtures: ${FIXTURES_OUTCOME}"
+            echo "- Browser E2E: ${E2E_OUTCOME}"
+            echo "- Checks: public page, image-to-PDF download, DRM-free EPUB preview"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/"
+            echo "- Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo '```text'
+            for log in /tmp/runtime.log /tmp/fixtures.log /tmp/e2e.log; do
+              if [[ -f "$log" ]]; then
+                echo "--- $(basename "$log") ---"
+                tail -n 30 "$log"
+              fi
+            done
+            echo '```'
+          } > /tmp/deploy-status.md
           CONTENT="$(base64 -w 0 /tmp/deploy-status.md)"
-          CURRENT_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" --jq .sha 2>/dev/null || true)"
+          CURRENT_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" --jq .sha)"
           gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" \
             -f message="Update ShelfPDF deployment status" \
             -f content="$CONTENT" \
             -f sha="$CURRENT_SHA" \
             -f branch="main"
+
+      - name: Fail on unsuccessful browser verification
+        if: always()
+        env:
+          RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
+          FIXTURES_OUTCOME: ${{ steps.fixtures.outcome }}
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+        run: |
+          [[ "$RUNTIME_OUTCOME" == "success" ]]
+          [[ "$FIXTURES_OUTCOME" == "success" ]]
+          [[ "$E2E_OUTCOME" == "success" ]]
