@@ -1,4 +1,4 @@
-const CACHE = 'shelfpdf-web-v2';
+const CACHE = 'shelfpdf-web-v3';
 const LOCAL_ASSETS = [
   './', './index.html', './styles.css', './core.js', './ui.js', './images.js',
   './epub-utils.js', './epub-main.js', './init.js',
