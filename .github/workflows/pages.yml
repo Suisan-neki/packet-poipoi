@@ -55,18 +55,67 @@ jobs:
     needs: deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Verify ShelfPDF public page
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install browser test runtime
         run: |
-          URL="https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/"
-          for attempt in {1..12}; do
-            if curl --fail --silent --show-error --location "$URL" | grep -q "ShelfPDF Web"; then
-              echo "Verified $URL"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Published page did not return the expected content." >&2
-          exit 1
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Create test image and EPUB
+        run: |
+          python3 - <<'PY'
+          import binascii
+          import struct
+          import zlib
+          import zipfile
+          from pathlib import Path
+
+          def chunk(kind, data):
+              return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', binascii.crc32(kind + data) & 0xffffffff)
+
+          width, height = 32, 48
+          rows = []
+          for y in range(height):
+              row = bytearray([0])
+              for x in range(width):
+                  row.extend((35 + x * 4, 70 + y * 2, 180))
+              rows.append(bytes(row))
+          png = b'\x89PNG\r\n\x1a\n'
+          png += chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+          png += chunk(b'IDAT', zlib.compress(b''.join(rows)))
+          png += chunk(b'IEND', b'')
+          Path('/tmp/shelfpdf-test.png').write_bytes(png)
+
+          with zipfile.ZipFile('/tmp/shelfpdf-test.epub', 'w') as archive:
+              archive.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+              archive.writestr('META-INF/container.xml', '''<?xml version="1.0"?>
+          <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+            <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+          </container>''')
+              archive.writestr('OEBPS/content.opf', '''<?xml version="1.0" encoding="UTF-8"?>
+          <package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid">
+            <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+              <dc:identifier id="bookid">shelfpdf-test</dc:identifier>
+              <dc:title>ShelfPDF browser test</dc:title>
+              <dc:language>ja</dc:language>
+            </metadata>
+            <manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+            <spine><itemref idref="chapter"/></spine>
+          </package>''')
+              archive.writestr('OEBPS/chapter.xhtml', '''<?xml version="1.0" encoding="UTF-8"?>
+          <html xmlns="http://www.w3.org/1999/xhtml" lang="ja"><head><title>Test</title></head>
+          <body><h1>ShelfPDF EPUB test chapter</h1><p>Browser conversion verification.</p></body></html>''')
+          PY
+
+      - name: Verify page and conversions in Chromium
+        env:
+          SHELFPDF_URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/
+        run: node tools/shelfpdf/e2e.mjs
 
       - name: Record verification
         env:
@@ -76,21 +125,15 @@ jobs:
           # ShelfPDF deployment status
 
           - Status: verified
+          - Checks: public page, image-to-PDF download, DRM-free EPUB preview
           - Commit: ${GITHUB_SHA}
           - URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/
           - Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           EOF
           CONTENT="$(base64 -w 0 /tmp/deploy-status.md)"
           CURRENT_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" --jq .sha 2>/dev/null || true)"
-          if [[ -n "$CURRENT_SHA" ]]; then
-            gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" \
-              -f message="Update ShelfPDF deployment status" \
-              -f content="$CONTENT" \
-              -f sha="$CURRENT_SHA" \
-              -f branch="main"
-          else
-            gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" \
-              -f message="Record ShelfPDF deployment status" \
-              -f content="$CONTENT" \
-              -f branch="main"
-          fi
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" \
+            -f message="Update ShelfPDF deployment status" \
+            -f content="$CONTENT" \
+            -f sha="$CURRENT_SHA" \
+            -f branch="main"
