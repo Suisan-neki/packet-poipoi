@@ -1,13 +1,13 @@
 # ShelfPDF deployment status
 
-- Status: failed
+- Status: verified
 - Runtime setup: success
 - Test fixtures: success
-- Browser E2E: failure
+- Browser E2E: success
 - Checks: public page, image-to-PDF download, DRM-free EPUB preview
-- Commit: 9559fc2864bdc572f2e4ee2be2818ce8b4d1625c
+- Commit: d356aa2150b04b1469d310081e1ce8f63f8e2457
 - URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/
-- Workflow: https://github.com/Suisan-neki/packet-poipoi/actions/runs/30803651798
+- Workflow: https://github.com/Suisan-neki/packet-poipoi/actions/runs/30803947984
 
 ```text
 --- runtime.log ---
@@ -43,17 +43,7 @@ Downloading Chromium Headless Shell 140.0.7339.16 (playwright build v1187) from 
 Chromium Headless Shell 140.0.7339.16 (playwright build v1187) downloaded to /home/runner/.cache/ms-playwright/chromium_headless_shell-1187
 --- fixtures.log ---
 --- e2e.log ---
-node:internal/modules/run_main:123
-    triggerUncaughtException(
-    ^
-
-page.waitForEvent: Timeout 60000ms exceeded while waiting for event "download"
-=========================== logs ===========================
-waiting for event "download"
-============================================================
-    at /home/runner/work/packet-poipoi/packet-poipoi/tools/shelfpdf/e2e.mjs:19:32 {
-  name: 'TimeoutError'
-}
-
-Node.js v22.23.1
+Libraries: {"jszip":true,"jspdf":false}
+ShelfPDF E2E verified: public page, image PDF download, and EPUB preview.
+console.error: Failed to find a valid digest in the 'integrity' attribute for resource 'https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js' with computed SHA-512 integrity 'plOdviVmws4Y3JAvbnpfKb2hVxKM1lCwsi3vmElYRj+tiDLffZ4FVUj5a8vyKJ9pIgl8JCAHEJ4D1iUKBecswg=='. The resource has been blocked.
 ```
