@@ -22,6 +22,9 @@ try {
     jspdf: Boolean(window.jspdf?.jsPDF),
   }));
   console.log(`Libraries: ${JSON.stringify(libraryState)}`);
+  if (!libraryState.jszip || !libraryState.jspdf) {
+    throw new Error(`Required browser libraries are unavailable. libraries=${JSON.stringify(libraryState)} browser=${JSON.stringify(browserMessages)}`);
+  }
 
   await page.setInputFiles('#imageInput', imagePath);
   await page.waitForFunction(() => !document.querySelector('#makeImagePdf')?.disabled);
