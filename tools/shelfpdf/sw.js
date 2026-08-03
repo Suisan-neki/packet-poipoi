@@ -1,11 +1,10 @@
-const CACHE = 'shelfpdf-web-v2';
+const CACHE = 'shelfpdf-web-v3';
 const LOCAL_ASSETS = [
   './', './index.html', './styles.css', './core.js', './ui.js', './images.js',
   './epub-utils.js', './epub-main.js', './init.js',
 ];
 const REMOTE_ASSETS = [
   'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
-  'https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js',
 ];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll([...LOCAL_ASSETS, ...REMOTE_ASSETS])).catch(() => undefined));
