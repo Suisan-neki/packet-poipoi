@@ -8,7 +8,6 @@
   <title>ShelfPDF Web</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js" integrity="sha512-+EeCylkt9WHJk5tGJxYdecHOcXFRME7qnbsfeMsdQL6NUPYm2+uGFmyleEqsmVoap/f3dN/sc3BX9t9kHXkHHg==" crossorigin="anonymous"></script>
 </head>
 <body>
   <main class="app-shell">
@@ -83,7 +82,7 @@
     </section>
 
     <div class="notice">暗号化・DRM保護されたKFX、AZW、AZW3、Kindle Unlimited本には対応しません。EPUB内に通常のフォント難読化以外の暗号化が見つかった場合は処理を止めます。</div>
-    <footer>処理は端末内で完結します。外部通信はアプリ本体のJavaScriptライブラリを読み込むときだけ発生し、選択した書籍や画像の内容は送信しません。</footer>
+    <footer>処理は端末内で完結します。CBZ・EPUB展開用ライブラリを読み込むときだけ外部通信が発生し、選択した書籍や画像の内容は送信しません。</footer>
   </main>
   <script src="core.js"></script>
   <script src="ui.js"></script>
