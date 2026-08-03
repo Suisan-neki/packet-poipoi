@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -50,3 +50,47 @@ jobs:
     steps:
       - uses: actions/deploy-pages@v4
         id: deployment
+
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify ShelfPDF public page
+        run: |
+          URL="https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/"
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --location "$URL" | grep -q "ShelfPDF Web"; then
+              echo "Verified $URL"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Published page did not return the expected content." >&2
+          exit 1
+
+      - name: Record verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > /tmp/deploy-status.md <<EOF
+          # ShelfPDF deployment status
+
+          - Status: verified
+          - Commit: ${GITHUB_SHA}
+          - URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/
+          - Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          EOF
+          CONTENT="$(base64 -w 0 /tmp/deploy-status.md)"
+          CURRENT_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" --jq .sha 2>/dev/null || true)"
+          if [[ -n "$CURRENT_SHA" ]]; then
+            gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" \
+              -f message="Update ShelfPDF deployment status" \
+              -f content="$CONTENT" \
+              -f sha="$CURRENT_SHA" \
+              -f branch="main"
+          else
+            gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/tools/shelfpdf/DEPLOY_STATUS.md" \
+              -f message="Record ShelfPDF deployment status" \
+              -f content="$CONTENT" \
+              -f branch="main"
+          fi
