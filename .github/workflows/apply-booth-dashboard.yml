@@ -1,0 +1,29 @@
+name: Apply booth-first dashboard
+
+on:
+  push:
+    branches:
+      - codex/simplify-dashboard-ui
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace dashboard source
+        run: |
+          base64 -d .tmp/booth-app.gz.b64 | gunzip > dashboard/src/app/App.tsx
+          base64 -d .tmp/booth-css.gz.b64 | gunzip > dashboard/src/app.css
+          base64 -d .tmp/booth-main.gz.b64 | gunzip > dashboard/src/main.tsx
+          rm -rf .tmp
+          rm -f dashboard/src/booth.css
+          rm .github/workflows/apply-booth-dashboard.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Refocus dashboard on the physical booth demo"
+          git push
