@@ -3,12 +3,12 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
+  type RefObject,
 } from "react";
 import { isWebDemo, subscribeStream } from "../stream.js";
 
 type DropPoint = "application" | "netfilter" | "xdp";
-type ExperimentPhase = 0 | 1 | 2 | 3;
+type RateStatus = "maintained" | "failed" | "unverified";
 
 interface ExperimentEnvironment {
   receiver_model: string;
@@ -61,26 +61,20 @@ interface HarborEvent extends Partial<ExperimentRun> {
 interface RateSummary {
   targetPps: number;
   actualPps: number;
-  loadDeliveryPercent: number;
-  cpuPercent: number;
-  softirqPer10k: number;
-  appReceivePercent: number;
   successPercent: number;
   latencyP95Ms: number;
-  runs: number;
+  cpuPercent: number;
   maintained: boolean;
-  status: "maintained" | "failed" | "unverified";
+  status: RateStatus;
 }
 
 interface ConditionSummary {
   dropPoint: DropPoint;
-  label: string;
-  location: string;
   rates: RateSummary[];
   maxMaintainedPps: number | null;
   limitResult: RateSummary | null;
-  totalRuns: number;
   attachMode: string;
+  mixedAttachModes: boolean;
   nonMonotonic: boolean;
 }
 
@@ -94,60 +88,54 @@ const DROP_POINTS: DropPoint[] = ["application", "netfilter", "xdp"];
 const SAMPLE_PPS_STEPS = [500, 2_000, 5_000, 10_000, 20_000, 50_000];
 const SAMPLE_REPETITIONS = 3;
 
-const PHASES = [
-  {
-    label: "アプリで捨てる",
-    short: "Application",
-    code: "APPLICATION",
-    dropPoint: "application",
-  },
-  {
-    label: "途中で捨てる",
-    short: "nftables",
-    code: "NETFILTER",
-    dropPoint: "netfilter",
-  },
-  {
-    label: "入口で捨てる",
-    short: "XDP",
-    code: "XDP",
-    dropPoint: "xdp",
-  },
-  {
-    label: "結果を比べる",
-    short: "結果",
-    code: "COMPARE",
-    dropPoint: null,
-  },
-] as const;
-
-const CONDITION_COPY: Record<
-  DropPoint,
-  {
-    eyebrow: string;
-    title: string;
-    description: string;
-  }
-> = {
+const CONDITION_META = {
   application: {
-    eyebrow: "条件1｜Application",
-    title: "アプリで捨てる",
-    description:
-      "破棄対象のUDPパケットをアプリまで届け、受信後に捨てます。この条件を基準に、Webサービスが判定基準を満たす最大ppsを測ります。",
+    order: "01",
+    plain: "アプリで捨てる",
+    short: "アプリ",
+    technical: "Application / UDP socket",
+    scoreTechnical: "UDP socket",
+    stopIndex: 4,
+    description: "UDP socketまで届け、アプリが受信した後に破棄します。",
   },
   netfilter: {
-    eyebrow: "条件2｜nftables",
-    title: "nftablesで捨てる",
-    description:
-      "同じUDPパケットをnftablesで破棄し、アプリまでの受信処理を省きます。送信量と判定基準をそろえ、最大ppsを比較します。",
+    order: "02",
+    plain: "途中で捨てる",
+    short: "途中",
+    technical: "nftables / Netfilter input",
+    scoreTechnical: "Netfilter",
+    stopIndex: 3,
+    description: "nftablesのdrop ruleをNetfilter input hookで適用します。",
   },
   xdp: {
-    eyebrow: "条件3｜XDP",
-    title: "XDPで捨てる",
-    description:
-      "同じUDPパケットをNIC直後のXDPで破棄し、通常のLinux受信処理へ進ませません。この条件でWebサービスが判定基準を満たす最大ppsを測ります。",
+    order: "03",
+    plain: "入口で捨てる",
+    short: "入口",
+    technical: "eBPF / XDP_DROP",
+    scoreTechnical: "XDP",
+    stopIndex: 1,
+    description: "eBPFプログラムがXDP hookでXDP_DROPを返します。",
   },
-};
+} satisfies Record<
+  DropPoint,
+  {
+    order: string;
+    plain: string;
+    short: string;
+    technical: string;
+    scoreTechnical: string;
+    stopIndex: number;
+    description: string;
+  }
+>;
+
+const PATH_LAYERS = [
+  { id: "nic", plain: "LAN", technical: "NIC" },
+  { id: "xdp", plain: "入口", technical: "XDP hook" },
+  { id: "stack", plain: "受信処理", technical: "network stack" },
+  { id: "netfilter", plain: "ルール", technical: "Netfilter input" },
+  { id: "application", plain: "アプリ", technical: "UDP socket" },
+] as const;
 
 const SAMPLE_PROFILES: Record<
   DropPoint,
@@ -173,7 +161,6 @@ const SAMPLE_PROFILES: Record<
   },
 };
 
-// 公開ページは実験画面を説明するためのfixture。実測値ではない。
 const FIXTURE_RUNS: ExperimentRun[] = DROP_POINTS.flatMap(dropPoint =>
   SAMPLE_PPS_STEPS.flatMap((targetPps, rateIndex) =>
     [1, 2, 3].map(repetition => {
@@ -183,6 +170,7 @@ const FIXTURE_RUNS: ExperimentRun[] = DROP_POINTS.flatMap(dropPoint =>
       const successes = Math.round(
         checks * profile.success[rateIndex] / 100,
       );
+
       return {
         experiment_id: "sample-service-limit",
         run_id: `sample-${dropPoint}-${targetPps}-${repetition}`,
@@ -198,7 +186,11 @@ const FIXTURE_RUNS: ExperimentRun[] = DROP_POINTS.flatMap(dropPoint =>
         cpu_busy_percent: profile.cpu[rateIndex] + jitter * 0.8,
         net_rx_softirq_delta: Math.round(
           targetPps * 10 *
-            (dropPoint === "xdp" ? 0.18 : dropPoint === "netfilter" ? 0.62 : 0.9),
+            (dropPoint === "xdp"
+              ? 0.18
+              : dropPoint === "netfilter"
+                ? 0.62
+                : 0.9),
         ),
         xdp_attach_mode: dropPoint === "xdp" ? "native" : "not_used",
         environment: {
@@ -232,18 +224,6 @@ const DEFAULT_HEALTH: HealthState = {
   statusCode: 200,
 };
 
-const LAYERS = [
-  { id: "nic", label: "LANの入口", sub: "NIC" },
-  { id: "xdp", label: "入口の判定", sub: "XDP" },
-  { id: "stack", label: "通信の処理", sub: "Linux stack" },
-  { id: "netfilter", label: "途中の判定", sub: "nftables" },
-  { id: "application", label: "アプリ", sub: "UDP socket" },
-] as const;
-
-function clampPhase(value: number): ExperimentPhase {
-  return Math.max(0, Math.min(3, value)) as ExperimentPhase;
-}
-
 function median(values: number[]) {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -271,14 +251,10 @@ function actualPps(run: ExperimentRun) {
   return run.packets_sent * 1_000 / run.duration_ms;
 }
 
-function loadDeliveryPercent(run: ExperimentRun) {
-  if (run.target_pps <= 0) return 0;
-  return actualPps(run) * 100 / run.target_pps;
-}
-
 function loadRateAchieved(run: ExperimentRun) {
+  if (run.target_pps <= 0) return false;
   const threshold = run.sweep?.min_load_delivery_percent ?? 90;
-  return loadDeliveryPercent(run) >= threshold;
+  return actualPps(run) * 100 / run.target_pps >= threshold;
 }
 
 function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
@@ -287,52 +263,52 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
     const ppsSteps = [
       ...new Set(conditionRuns.map(run => run.target_pps)),
     ].sort((a, b) => a - b);
+    const observedAttachModes =
+      dropPoint === "xdp"
+        ? [
+            ...new Set(
+              conditionRuns
+                .map(run => run.xdp_attach_mode)
+                .filter(mode => mode === "native" || mode === "generic"),
+            ),
+          ]
+        : [];
+    const mixedAttachModes = observedAttachModes.length > 1;
+
     const rates = ppsSteps.map(targetPps => {
       const rateRuns = conditionRuns.filter(run => run.target_pps === targetPps);
       const validRuns = rateRuns.filter(loadRateAchieved);
       const maintainedRuns = validRuns.filter(run =>
         serviceMaintained(run.service_health),
       ).length;
-      const loadValid =
-        rateRuns.length > 0 && validRuns.length === rateRuns.length;
+      const valid =
+        !mixedAttachModes &&
+        rateRuns.length > 0 &&
+        validRuns.length === rateRuns.length;
       const maintained =
-        loadValid &&
+        valid &&
         validRuns.length > 0 &&
         maintainedRuns * 2 > validRuns.length;
+
       return {
         targetPps,
         actualPps: median(rateRuns.map(actualPps)),
-        loadDeliveryPercent: median(rateRuns.map(loadDeliveryPercent)),
-        cpuPercent: median(rateRuns.map(run => run.cpu_busy_percent)),
-        softirqPer10k: median(
-          rateRuns.map(run =>
-            run.packets_sent === 0
-              ? 0
-              : run.net_rx_softirq_delta * 10_000 / run.packets_sent,
-          ),
-        ),
-        appReceivePercent: median(
-          rateRuns.map(run =>
-            run.packets_sent === 0
-              ? 0
-              : run.packets_received_by_app * 100 / run.packets_sent,
-          ),
-        ),
         successPercent: median(
           rateRuns.map(run => successPercent(run.service_health)),
         ),
         latencyP95Ms: median(
           rateRuns.map(run => run.service_health?.latency_p95_ms ?? 0),
         ),
-        runs: rateRuns.length,
+        cpuPercent: median(rateRuns.map(run => run.cpu_busy_percent)),
         maintained,
-        status: !loadValid
+        status: !valid
           ? "unverified" as const
           : maintained
             ? "maintained" as const
             : "failed" as const,
       };
     });
+
     const firstNonMaintained = rates.findIndex(rate => !rate.maintained);
     const maintainedPrefix =
       firstNonMaintained === -1
@@ -342,25 +318,19 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
     const nonMonotonic =
       firstNonMaintained !== -1 &&
       rates.slice(firstNonMaintained + 1).some(rate => rate.maintained);
+
     return {
       dropPoint,
-      label:
-        dropPoint === "application"
-          ? "アプリで捨てる"
-          : dropPoint === "netfilter"
-            ? "途中で捨てる"
-            : "入口で捨てる",
-      location:
-        dropPoint === "application"
-          ? "Application"
-          : dropPoint === "netfilter"
-            ? "nftables"
-            : "XDP",
       rates,
       maxMaintainedPps: limitResult?.actualPps ?? null,
       limitResult,
-      totalRuns: conditionRuns.length,
-      attachMode: conditionRuns.at(-1)?.xdp_attach_mode ?? "unknown",
+      attachMode:
+        mixedAttachModes
+          ? `${observedAttachModes.join(" / ")}（混在）`
+          : observedAttachModes.at(0) ??
+            conditionRuns.at(-1)?.xdp_attach_mode ??
+            "unknown",
+      mixedAttachModes,
       nonMonotonic,
     };
   });
@@ -379,447 +349,320 @@ function formatPps(value: number | null) {
   return formatNumber(value);
 }
 
-function predictionLabel(dropPoint: DropPoint | null) {
-  if (dropPoint === "application") return "アプリ";
-  if (dropPoint === "netfilter") return "nftables";
-  if (dropPoint === "xdp") return "XDP";
-  return "未回答";
-}
-
-function ShipMark() {
+function PacketMark() {
   return (
-    <svg viewBox="0 0 220 72" aria-hidden="true">
-      <path d="M10 44 Q16 57 28 60 L192 60 Q204 57 210 44 Z" />
-      <rect x="26" y="37" width="168" height="7" />
-      <rect x="128" y="20" width="42" height="17" />
-      <rect x="160" y="8" width="8" height="13" />
-      <line x1="116" y1="8" x2="116" y2="37" />
-      <rect x="32" y="28" width="24" height="9" />
-      <rect x="60" y="28" width="24" height="9" />
-      <rect x="88" y="28" width="24" height="9" />
+    <svg viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="7" y="9" width="34" height="30" rx="8" />
+      <path d="M14 19h13" />
+      <path d="m24 14 5 5-5 5" />
+      <path d="M34 29H21" />
+      <path d="m24 24-5 5 5 5" />
     </svg>
   );
 }
 
-function LayerPath({
-  dropPoint,
-  rates,
+function RigView({
+  selected,
+  displayPps,
+  modeLabel,
+  loadLabel,
+  health,
   payloadBytes,
+  xdpAttachMode,
 }: {
-  dropPoint: DropPoint;
-  rates: RateSummary[];
+  selected: DropPoint;
+  displayPps: number | null;
+  modeLabel: string;
+  loadLabel: string;
+  health: HealthState;
   payloadBytes: number;
+  xdpAttachMode: string;
 }) {
-  const stopIndex =
-    dropPoint === "xdp" ? 1 : dropPoint === "netfilter" ? 3 : 4;
-  const firstRate = rates.at(0)?.targetPps ?? SAMPLE_PPS_STEPS[0];
-  const lastRate = rates.at(-1)?.targetPps ?? SAMPLE_PPS_STEPS.at(-1) ?? 0;
+  const meta = CONDITION_META[selected];
+  const waiting =
+    !health.success && health.statusCode == null && health.latencyMs === 0;
+  const healthLabel = waiting
+    ? "計測待ち"
+    : health.success
+      ? `HTTP ${health.statusCode ?? "OK"} · ${health.latencyMs || "—"} ms`
+      : "応答なし";
+
   return (
-    <div className={`layer-path layer-path--${dropPoint}`}>
-      <div className="packet-source">
-        <span>UDPパケットを増やす</span>
-        <strong>
-          {formatPps(firstRate)} → {formatPps(lastRate)} pps
-        </strong>
-        <em>{payloadBytes} byte · 宛先 :4000</em>
+    <section className="showcase-rig" aria-label="Raspberry Pi 2台の実験構成">
+      <div className="showcase-rig__topline">
+        <span><i /> {modeLabel}</span>
+        <strong>{meta.plain}</strong>
+        <code>{meta.technical}</code>
       </div>
-      <div className="layer-sequence" aria-label="Linuxの受信経路">
-        {LAYERS.map((layer, index) => {
-          const reached = index <= stopIndex;
-          const stopped = index === stopIndex;
-          return (
-            <div className="layer-unit" key={layer.id}>
-              {index > 0 && (
-                <div className={`path-link ${reached ? "is-reached" : ""}`}>
-                  <i style={{ "--link-index": index } as CSSProperties} />
-                </div>
-              )}
-              <div
-                className={`layer-card ${reached ? "is-reached" : ""} ${
-                  stopped ? "is-stop" : ""
-                }`}
-              >
-                <small>{layer.sub}</small>
-                <strong>{layer.label}</strong>
-                {stopped && (
-                  <span>
-                    {dropPoint === "application" ? "受信して破棄" : "ここで破棄"}
-                  </span>
-                )}
-              </div>
+
+      <div className="showcase-rig__flow">
+        <div className="showcase-device showcase-device--sender">
+          <b>Pi A</b>
+          <strong>{loadLabel}</strong>
+          <span>{formatPps(displayPps)} <em>pps</em></span>
+          <small>UDP :4000 · {payloadBytes} byte</small>
+        </div>
+
+        <div className="showcase-wire" aria-label="Ethernet接続">
+          <i className="packet packet--1" />
+          <i className="packet packet--2" />
+          <i className="packet packet--3" />
+          <span>Ethernet</span>
+        </div>
+
+        <div className="showcase-device showcase-device--receiver">
+          <header>
+            <div>
+              <b>Pi B</b>
+              <strong>捨てながらHTTPを守る</strong>
             </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function PredictionIntro({
-  onChoose,
-  onSkip,
-}: {
-  onChoose: (dropPoint: DropPoint) => void;
-  onSkip: () => void;
-}) {
-  const choices: Array<{
-    dropPoint: DropPoint;
-    label: string;
-    location: string;
-  }> = [
-    {
-      dropPoint: "application",
-      label: "アプリで捨てる",
-      location: "Application",
-    },
-    {
-      dropPoint: "netfilter",
-      label: "途中で捨てる",
-      location: "nftables",
-    },
-    {
-      dropPoint: "xdp",
-      label: "入口で捨てる",
-      location: "XDP",
-    },
-  ];
-
-  return (
-    <div className="prediction-backdrop">
-      <section className="prediction-panel" aria-labelledby="prediction-title">
-        <span>結果を予想する</span>
-        <h2 id="prediction-title">
-          どこで捨てると、
-          <strong>Webサービスは最も高い負荷まで動き続ける？</strong>
-        </h2>
-        <p>
-          パケットを手前で捨てるほど、後段の処理は減ります。UDPパケットの
-          送信量を段階的に上げ、同じRaspberry Pi上のWebサービスが
-          判定基準を満たせる最大ppsを比べます。
-        </p>
-        <div className="prediction-choices">
-          {choices.map((choice, index) => (
-            <button
-              type="button"
-              key={choice.dropPoint}
-              onClick={() => onChoose(choice.dropPoint)}
-            >
-              <b>0{index + 1}</b>
+            <div className={`showcase-health ${health.success ? "is-ok" : waiting ? "is-waiting" : "is-down"}`}>
+              <i />
               <span>
-                <strong>{choice.label}</strong>
-                <small>{choice.location}</small>
+                <small>Webサービス</small>
+                <strong>{healthLabel}</strong>
               </span>
-            </button>
-          ))}
-        </div>
-        <button className="prediction-skip" type="button" onClick={onSkip}>
-          予想せず進む →
-        </button>
-      </section>
-    </div>
-  );
-}
+            </div>
+          </header>
 
-function LoadSweep({
-  summary,
-  minSuccessPercent,
-  maxP95LatencyMs,
-}: {
-  summary: ConditionSummary;
-  minSuccessPercent: number;
-  maxP95LatencyMs: number;
-}) {
-  return (
-    <div className="load-sweep">
-      <header>
-        <span>送信量を上げて計測</span>
-        <strong>
-          HTTP成功率 {formatNumber(minSuccessPercent)}%以上かつ p95{" "}
-          {formatNumber(maxP95LatencyMs)}ms以下を「基準内」と判定
-        </strong>
-      </header>
-      <div
-        className="rate-steps"
-        style={{
-          "--rate-count": Math.max(summary.rates.length, 1),
-        } as CSSProperties}
-      >
-        {summary.rates.map(rate => (
-          <div
-            className={`rate-step is-${rate.status}`}
-            key={rate.targetPps}
-          >
-            <small>目標 {formatPps(rate.targetPps)} pps</small>
-            <strong>
-              {rate.status === "maintained"
-                ? "基準内"
-                : rate.status === "failed"
-                  ? "基準外"
-                  : "測定不成立"}
-            </strong>
-            <span>
-              実測 {formatPps(rate.actualPps)} pps · HTTP{" "}
-              {formatNumber(rate.successPercent)}%
-            </span>
+          <div className="showcase-path">
+            {PATH_LAYERS.map((layer, index) => {
+              const stopped = index === meta.stopIndex;
+              const reached = index <= meta.stopIndex;
+              return (
+                <div className="showcase-path__step" key={layer.id}>
+                  {index > 0 && (
+                    <span className={`showcase-path__link ${reached ? "is-active" : ""}`}>
+                      {reached && <i />}
+                    </span>
+                  )}
+                  <div className={`showcase-path__node ${stopped ? "is-stop" : reached ? "is-reached" : "is-after"}`}>
+                    <small>{layer.plain}</small>
+                    <strong>{layer.technical}</strong>
+                    {stopped && <em>DROP</em>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        ))}
+
+          {selected === "xdp" && (
+            <p>XDP attach: <strong>{xdpAttachMode}</strong></p>
+          )}
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
 
-function ConditionStage({
-  dropPoint,
-  summary,
-  payloadBytes,
-  minSuccessPercent,
-  maxP95LatencyMs,
-}: {
-  dropPoint: DropPoint;
-  summary: ConditionSummary;
-  payloadBytes: number;
-  minSuccessPercent: number;
-  maxP95LatencyMs: number;
-}) {
-  const copy = CONDITION_COPY[dropPoint];
-  const limit = summary.limitResult;
-  return (
-    <div className="condition-stage">
-      <section className="stage-copy">
-        <span>{copy.eyebrow}</span>
-        <h2>{copy.title}</h2>
-        <p>{copy.description}</p>
-        <div className="limit-callout">
-          <small>基準を満たした最大負荷</small>
-          <strong>
-            {formatPps(summary.maxMaintainedPps)}
-            <em> pps</em>
-          </strong>
-          <span>送信数と計測時間から算出</span>
-        </div>
-        {summary.nonMonotonic && (
-          <div className="measurement-warning">
-            負荷を上げたにもかかわらず、判定結果が前後しています。再測定が必要です。
-          </div>
-        )}
-      </section>
-
-      <section className="stage-path">
-        <LayerPath
-          dropPoint={dropPoint}
-          rates={summary.rates}
-          payloadBytes={payloadBytes}
-        />
-        <LoadSweep
-          summary={summary}
-          minSuccessPercent={minSuccessPercent}
-          maxP95LatencyMs={maxP95LatencyMs}
-        />
-        <div className="condition-metrics">
-          <div>
-            <small>最大pps</small>
-            <strong>{formatPps(summary.maxMaintainedPps)} pps</strong>
-            <em>低いppsから連続して基準内となった最大値</em>
-          </div>
-          <div>
-            <small>上限時のHTTP成功率</small>
-            <strong>
-              {limit ? `${formatNumber(limit.successPercent, 0)}%` : "—"}
-            </strong>
-            <em>基準 {formatNumber(minSuccessPercent)}%以上</em>
-          </div>
-          <div>
-            <small>上限時の応答時間 p95</small>
-            <strong>
-              {limit ? `${formatNumber(limit.latencyP95Ms)} ms` : "—"}
-            </strong>
-            <em>基準 {formatNumber(maxP95LatencyMs)}ms以下</em>
-          </div>
-          <div>
-            <small>上限時のCPU使用率</small>
-            <strong>
-              {limit ? `${formatNumber(limit.cpuPercent, 1)}%` : "—"}
-            </strong>
-            <em>
-              {dropPoint === "xdp"
-                ? `XDP ${summary.attachMode}`
-                : `${summary.totalRuns}回計測`}
-            </em>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function CompareStage({
+function ScoreCards({
   summaries,
-  prediction,
-  minSuccessPercent,
-  maxP95LatencyMs,
+  selected,
+  onSelect,
 }: {
   summaries: ConditionSummary[];
-  prediction: DropPoint | null;
-  minSuccessPercent: number;
-  maxP95LatencyMs: number;
+  selected: DropPoint;
+  onSelect: (dropPoint: DropPoint) => void;
 }) {
-  const measured = summaries.filter(summary => summary.maxMaintainedPps != null);
-  const measuredBest = measured.reduce<ConditionSummary | null>(
-    (best, current) =>
-      best == null ||
-      Number(current.maxMaintainedPps) > Number(best.maxMaintainedPps)
-        ? current
-        : best,
-    null,
+  return (
+    <section className="showcase-scores" aria-label="3条件の比較結果">
+      {summaries.map(summary => {
+        const meta = CONDITION_META[summary.dropPoint];
+        return (
+          <button
+            key={summary.dropPoint}
+            type="button"
+            className={`showcase-score showcase-score--${summary.dropPoint} ${selected === summary.dropPoint ? "is-selected" : ""}`}
+            aria-pressed={selected === summary.dropPoint}
+            onClick={() => onSelect(summary.dropPoint)}
+          >
+            <span className="showcase-score__label">
+              <b>{meta.order}</b>
+              <span>
+                <strong>{meta.plain}</strong>
+                <small>{meta.scoreTechnical}</small>
+              </span>
+            </span>
+            <span className="showcase-score__value">
+              <strong>{formatPps(summary.maxMaintainedPps)}</strong>
+              <em>pps</em>
+            </span>
+          </button>
+        );
+      })}
+    </section>
   );
-  const baseline = summaries.find(item => item.dropPoint === "application");
-  const ratio =
-    measuredBest?.maxMaintainedPps && baseline?.maxMaintainedPps
-      ? measuredBest.maxMaintainedPps / baseline.maxMaintainedPps
-      : null;
+}
+
+function DetailsDialog({
+  onClose,
+  closeButtonRef,
+  representative,
+  summaries,
+}: {
+  onClose: () => void;
+  closeButtonRef: RefObject<HTMLButtonElement | null>;
+  representative?: ExperimentRun;
+  summaries: ConditionSummary[];
+}) {
+  const minSuccess = representative?.service_health?.min_success_percent ?? 99;
+  const maxP95 = representative?.service_health?.max_p95_latency_ms ?? 100;
+  const minDelivery = representative?.sweep?.min_load_delivery_percent ?? 90;
+  const repetitions = representative?.sweep?.repetitions ?? SAMPLE_REPETITIONS;
+  const duration = (representative?.duration_ms ?? 10_000) / 1_000;
+  const xdpMode = summaries.find(item => item.dropPoint === "xdp")?.attachMode ?? "unknown";
 
   return (
-    <div className="compare-stage">
-      <section className="compare-heading">
-        <div>
-          <span>計測結果</span>
-          <h2>破棄位置ごとの最大ppsを比較</h2>
-        </div>
-        <p>
-          各条件で、HTTP成功率{formatNumber(minSuccessPercent)}%以上かつp95{" "}
-          {formatNumber(maxP95LatencyMs)}ms以下を満たした最大ppsを比較します。
-          CPU使用率は、結果を解釈するための参考値です。
-        </p>
-      </section>
+    <div className="showcase-dialog-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="showcase-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="showcase-details-title"
+        onMouseDown={event => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <span>TECHNICAL DETAILS</span>
+            <h2 id="showcase-details-title">聞かれたときに見せる計測条件</h2>
+          </div>
+          <button ref={closeButtonRef} type="button" onClick={onClose}>
+            閉じる <kbd>Esc</kbd>
+          </button>
+        </header>
 
-      <div className="comparison-table" role="table" aria-label="破棄位置ごとの実測比較">
-        <div className="comparison-row comparison-row--head" role="row">
-          <span role="columnheader">破棄した場所</span>
-          <span role="columnheader">基準を満たした最大pps</span>
-          <span role="columnheader">上限時のHTTP</span>
-          <span role="columnheader">上限時のCPU使用率</span>
-          <span role="columnheader">省けた受信処理</span>
-        </div>
-        {summaries.map((summary, index) => {
-          const limit = summary.limitResult;
-          return (
-            <div
-              className={`comparison-row comparison-row--${summary.dropPoint} ${
-                measuredBest?.dropPoint === summary.dropPoint ? "is-best" : ""
-              }`}
-              role="row"
-              key={summary.dropPoint}
-            >
-              <span role="cell">
-                <b>0{index + 1}</b>
-                <strong>{summary.label}</strong>
-                <small>{summary.location}</small>
-              </span>
-              <span className="metric-cell" role="cell">
-                <strong>{formatPps(summary.maxMaintainedPps)} pps</strong>
-                <small>実送信ppsの中央値</small>
-              </span>
-              <span className="metric-cell" role="cell">
-                <strong>
-                  {limit
-                    ? `${formatNumber(limit.successPercent)}% / ${formatNumber(limit.latencyP95Ms)}ms`
-                    : "—"}
-                </strong>
-                <small>成功率 / p95</small>
-              </span>
-              <span className="metric-cell" role="cell">
-                <strong>
-                  {limit ? `${formatNumber(limit.cpuPercent, 1)}%` : "—"}
-                </strong>
-                <small>CPU使用率</small>
-              </span>
-              <span role="cell">
-                {summary.dropPoint === "application"
-                  ? "なし（アプリまで処理）"
-                  : summary.dropPoint === "netfilter"
-                    ? "アプリへの受信処理"
-                    : "通常のLinux受信処理とアプリ"}
-              </span>
+        <div className="showcase-dialog__body">
+          <section className="showcase-detail-lead">
+            <article>
+              <span>増やす通信</span>
+              <strong>IPv4 / UDP :4000</strong>
+              <p>量を制御するための実験用負荷です。</p>
+            </article>
+            <article>
+              <span>守る通信</span>
+              <strong>HTTP GET /api/ping</strong>
+              <p>同じPi上のWebサービスを成功率と応答時間で監視します。</p>
+            </article>
+          </section>
+
+          <section className="showcase-detail-section">
+            <h3>上限値の判定</h3>
+            <div className="showcase-rules">
+              <article>
+                <b>1</b>
+                <strong>実送信量</strong>
+                <p>目標ppsの{formatNumber(minDelivery)}%未満は測定不成立</p>
+              </article>
+              <article>
+                <b>2</b>
+                <strong>HTTP維持</strong>
+                <p>成功率{formatNumber(minSuccess)}%以上・p95 {formatNumber(maxP95)}ms以下</p>
+              </article>
+              <article>
+                <b>3</b>
+                <strong>反復</strong>
+                <p>{formatNumber(duration, 1)}秒 × {repetitions}回、多数決と連続性を確認</p>
+              </article>
             </div>
-          );
-        })}
-      </div>
+          </section>
 
-      <div className="result-statement">
-        <span>
-          <small>あなたの予想</small>
-          {predictionLabel(prediction)}
-          <i>→</i>
-          <small>実測で最大</small>
-          {predictionLabel(measuredBest?.dropPoint ?? null)}
-        </span>
-        <strong>
-          {measuredBest && ratio
-            ? `${measuredBest.location}では、Applicationの約${formatNumber(ratio, 1)}倍のppsまで基準を満たしました。`
-            : "すべての負荷条件を計測すると、ここに最大ppsを表示します。"}
-        </strong>
-      </div>
+          <section className="showcase-detail-section">
+            <h3>3つの破棄位置</h3>
+            <div className="showcase-condition-details">
+              {DROP_POINTS.map(dropPoint => {
+                const meta = CONDITION_META[dropPoint];
+                return (
+                  <article key={dropPoint}>
+                    <span>{meta.order}</span>
+                    <strong>{meta.plain}</strong>
+                    <code>{meta.technical}</code>
+                    <p>{meta.description}</p>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="showcase-detail-section showcase-notes">
+            <article>
+              <h3>実験の範囲</h3>
+              <p>破棄対象をUDP portで事前に決められる場合だけを扱います。DDoS検知製品の評価ではありません。</p>
+            </article>
+            <article>
+              <h3>解釈の注意</h3>
+              <p>Pi、kernel、NIC、driver、payload、rate段階に依存します。native XDPとgeneric XDPは混ぜません。</p>
+            </article>
+          </section>
+
+          <section className="showcase-environment">
+            <h3>このrunの環境</h3>
+            <dl>
+              <div><dt>Receiver</dt><dd>{representative?.environment?.receiver_model ?? "unknown"}</dd></div>
+              <div><dt>Kernel</dt><dd>{representative?.environment?.kernel_release ?? "unknown"}</dd></div>
+              <div><dt>NIC / MTU</dt><dd>{representative?.environment?.network_interface ?? "unknown"} / {representative?.environment?.mtu ?? "unknown"}</dd></div>
+              <div><dt>CPU governor</dt><dd>{representative?.environment?.cpu_governor ?? "unknown"}</dd></div>
+              <div><dt>XDP attach</dt><dd>{xdpMode}</dd></div>
+              <div><dt>Experiment</dt><dd>{representative?.experiment_id ?? "waiting"}</dd></div>
+            </dl>
+          </section>
+        </div>
+      </section>
     </div>
   );
 }
 
 export default function App() {
   const demo = isWebDemo();
-  const [phase, setPhase] = useState<ExperimentPhase>(0);
-  const [autoplay, setAutoplay] = useState(() =>
-    typeof window === "undefined"
-      ? true
-      : !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
-  const [streamStatus, setStreamStatus] = useState(
-    demo ? "fixture" : "waiting",
-  );
-  const [runs, setRuns] = useState<ExperimentRun[]>(
-    demo ? FIXTURE_RUNS : [],
-  );
+  const [streamStatus, setStreamStatus] = useState(demo ? "fixture" : "waiting");
+  const [runs, setRuns] = useState<ExperimentRun[]>(demo ? FIXTURE_RUNS : []);
   const [health, setHealth] = useState<HealthState>(
     demo ? DEFAULT_HEALTH : { success: false, latencyMs: 0, statusCode: null },
   );
+  const [selected, setSelected] = useState<DropPoint>(demo ? "xdp" : "application");
   const [showDetails, setShowDetails] = useState(false);
-  const [prediction, setPrediction] = useState<DropPoint | null>(null);
-  const [showPrediction, setShowPrediction] = useState(true);
-  const detailsButtonRef = useRef<HTMLButtonElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const detailsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const manualPhaseRef = useRef(false);
 
   const summaries = useMemo(() => summarizeRuns(runs), [runs]);
-  const activeDropPoint = PHASES[phase].dropPoint;
-  const activeSummary = activeDropPoint
-    ? summaries.find(item => item.dropPoint === activeDropPoint)
-    : undefined;
   const representative = runs.at(-1);
   const sweepSteps = representative?.sweep?.pps_steps ?? SAMPLE_PPS_STEPS;
-  const repetitions =
-    representative?.sweep?.repetitions ?? SAMPLE_REPETITIONS;
-  const payloadBytes = representative?.payload_bytes ?? 128;
-  const durationSeconds = (representative?.duration_ms ?? 10_000) / 1_000;
-  const minSuccessPercent =
-    representative?.service_health?.min_success_percent ?? 99;
-  const maxP95LatencyMs =
-    representative?.service_health?.max_p95_latency_ms ?? 100;
-  const firstSweepRate = sweepSteps.at(0) ?? SAMPLE_PPS_STEPS[0];
-  const lastSweepRate =
-    sweepSteps.at(-1) ?? SAMPLE_PPS_STEPS.at(-1) ?? firstSweepRate;
-
-  function choosePhase(next: number) {
-    manualPhaseRef.current = true;
-    setPhase(clampPhase(next));
-    if (demo) setAutoplay(false);
-  }
-
-  function choosePrediction(dropPoint: DropPoint) {
-    manualPhaseRef.current = false;
-    setPrediction(dropPoint);
-    setShowPrediction(false);
-    setPhase(0);
-    if (demo) setAutoplay(true);
-  }
+  const repetitions = representative?.sweep?.repetitions ?? SAMPLE_REPETITIONS;
+  const measured = summaries.filter(summary => summary.maxMaintainedPps != null);
+  const best = measured.reduce<ConditionSummary | null>(
+    (current, candidate) =>
+      current == null || Number(candidate.maxMaintainedPps) > Number(current.maxMaintainedPps)
+        ? candidate
+        : current,
+    null,
+  );
+  const baseline = summaries.find(item => item.dropPoint === "application");
+  const ratio =
+    best?.maxMaintainedPps && baseline?.maxMaintainedPps
+      ? best.maxMaintainedPps / baseline.maxMaintainedPps
+      : null;
+  const complete = DROP_POINTS.every(dropPoint =>
+    sweepSteps.every(
+      targetPps =>
+        runs.filter(
+          run => run.drop_point === dropPoint && run.target_pps === targetPps,
+        ).length >= repetitions,
+    ),
+  );
+  const invalid = summaries.some(item => item.mixedAttachModes || item.nonMonotonic);
+  const selectedSummary = summaries.find(item => item.dropPoint === selected);
+  const selectedRun = [...runs].reverse().find(run => run.drop_point === selected);
+  const displayedPps = complete
+    ? selectedSummary?.maxMaintainedPps ?? null
+    : selectedRun
+      ? actualPps(selectedRun)
+      : null;
+  const rigModeLabel = demo
+    ? "SAMPLE RESULT"
+    : complete
+      ? "MEASURED RESULT"
+      : "LIVE EXPERIMENT";
+  const loadLabel = complete ? "上限時の実送信" : "現在の実送信";
 
   function openDetails() {
     previousFocusRef.current =
@@ -836,6 +679,7 @@ export default function App() {
   useEffect(() => {
     let disposed = false;
     let unsubscribe: undefined | (() => void);
+
     void subscribeStream({
       onStatus: status => {
         if (!disposed) setStreamStatus(status);
@@ -843,15 +687,16 @@ export default function App() {
       onEvent: raw => {
         if (disposed) return;
         const event = raw as HarborEvent;
+
         if (event.type === "traffic_health") {
           setHealth({
             success: Boolean(event.success),
             latencyMs: Number(event.latency_ms ?? 0),
-            statusCode:
-              event.status_code == null ? null : Number(event.status_code),
+            statusCode: event.status_code == null ? null : Number(event.status_code),
           });
           return;
         }
+
         if (
           event.type === "experiment_run" &&
           event.experiment_id &&
@@ -868,15 +713,7 @@ export default function App() {
               run,
             ];
           });
-          if (!manualPhaseRef.current) {
-            setPhase(
-              run.drop_point === "application"
-                ? 0
-                : run.drop_point === "netfilter"
-                  ? 1
-                  : 2,
-            );
-          }
+          setSelected(run.drop_point);
         }
       },
     }).then(subscription => {
@@ -886,6 +723,7 @@ export default function App() {
       }
       unsubscribe = subscription.unsubscribe;
     });
+
     return () => {
       disposed = true;
       unsubscribe?.();
@@ -893,329 +731,109 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!demo || !autoplay || showDetails || showPrediction) return;
-    const timer = window.setTimeout(() => {
-      setPhase(current => ((current + 1) % 4) as ExperimentPhase);
-    }, 9_000);
-    return () => window.clearTimeout(timer);
-  }, [autoplay, demo, phase, showDetails, showPrediction]);
-
-  useEffect(() => {
-    if (showDetails) {
-      closeButtonRef.current?.focus();
-    } else {
-      previousFocusRef.current?.focus();
-    }
+    if (showDetails) closeButtonRef.current?.focus();
+    else previousFocusRef.current?.focus();
   }, [showDetails]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeDetails();
-        return;
-      }
-      if (showDetails) return;
-      if (event.key.toLowerCase() === "d") {
-        openDetails();
-        return;
-      }
-      if (event.key === "ArrowRight") choosePhase(phase + 1);
-      if (event.key === "ArrowLeft") choosePhase(phase - 1);
-      const target = event.target as HTMLElement | null;
-      const isInteractive =
-        target?.closest("button, a, input, select, textarea") != null;
-      if (event.key === " " && !isInteractive) {
-        event.preventDefault();
-        setAutoplay(current => !current);
+      if (event.key === "Escape" && showDetails) closeDetails();
+      if (event.key.toLowerCase() === "d" && !showDetails) {
+        const target = event.target as HTMLElement | null;
+        if (!target?.closest("input, textarea, select")) openDetails();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [phase, showDetails]);
+  }, [showDetails]);
 
-  useEffect(() => {
-    if (demo || phase === 3 || manualPhaseRef.current) return;
-    const hasEveryRun = DROP_POINTS.every(dropPoint =>
-      sweepSteps.every(
-        targetPps =>
-          runs.filter(
-            run =>
-              run.drop_point === dropPoint && run.target_pps === targetPps,
-          ).length >= repetitions,
-      ),
-    );
-    if (hasEveryRun) setPhase(3);
-  }, [demo, phase, repetitions, runs, sweepSteps]);
+  const bestMeta = best ? CONDITION_META[best.dropPoint] : null;
 
   return (
-    <div className="booth-app">
-      <header className="booth-header">
-        <div className="brand">
-          <div className="brand-mark"><ShipMark /></div>
+    <div className="showcase-shell">
+      <header className="showcase-header">
+        <a className="showcase-brand" href="#showcase-top" aria-label="パケットぽいぽい">
+          <span><PacketMark /></span>
           <div>
             <strong>パケットぽいぽい</strong>
             <small>Raspberry Pi × Rust × eBPF/XDP</small>
           </div>
-        </div>
-        <div className="header-status">
-          <span className={demo ? "fixture-badge" : "live-badge"}>
-            {demo ? "SAMPLE DATA" : "LIVE"}
+        </a>
+        <div className="showcase-header__actions">
+          <span className={`showcase-data ${demo ? "is-sample" : "is-live"}`}>
+            {demo ? "SAMPLE" : `LIVE · ${streamStatus.toUpperCase()}`}
           </span>
-          <div>
-            <small>計測ID</small>
-            <strong>{representative?.experiment_id ?? "WAITING"}</strong>
-          </div>
-          <div>
-            <small>データ</small>
-            <strong>{demo ? "SAMPLE" : streamStatus.toUpperCase()}</strong>
-          </div>
           <button ref={detailsButtonRef} type="button" onClick={openDetails}>
             技術詳細 <kbd>D</kbd>
           </button>
         </div>
       </header>
 
-      <main className="booth-screen">
-        <section className="experiment-question">
+      <main id="showcase-top" className="showcase-main">
+        <section className="showcase-hero">
           <div>
-            <span>実験の問い</span>
+            <span>PHYSICAL NETWORK EXPERIMENT</span>
             <h1>
-              UDPパケットを捨てる位置で、
-              <strong>Webサービスの限界はどれだけ変わる？</strong>
+              <strong>不要な通信は、どこで捨てる？</strong>
+              <em>
+                {complete && !invalid && ratio != null
+                  ? `捨てる場所だけで、耐えられる負荷が${formatNumber(ratio, 1)}倍変わった。`
+                  : "Webサービスが耐えた最大負荷を、実機で比べる。"}
+              </em>
             </h1>
+            <p>Pi Aから同じUDP負荷を送り、Pi Bで破棄位置だけを変えます。</p>
           </div>
-          <div className="fixed-condition">
-            <small>全条件で同じ</small>
-            <strong>{payloadBytes} byte</strong>
-            <strong>
-              {formatNumber(durationSeconds, 1)}秒 × {repetitions}回
-            </strong>
-            <strong>
-              {formatPps(firstSweepRate)} → {formatPps(lastSweepRate)} pps
-            </strong>
-          </div>
-        </section>
 
-        <section className="canary-strip">
-          <div>
-            <span>判定基準</span>
-            <strong>
-              成功率 {formatNumber(minSuccessPercent)}%以上かつ p95{" "}
-              {formatNumber(maxP95LatencyMs)}ms以下
-            </strong>
-          </div>
-          <p>
-            UDPパケットの送信量を増やしながら、同じRaspberry PiのWebサービスへ
-            HTTP GETを繰り返す
-          </p>
-          <div className={health.success ? "canary-ok" : "canary-ng"}>
-            <span>{health.success ? "現在も応答" : "応答なし"}</span>
-            <strong>
-              HTTP {health.statusCode ?? "—"}{" "}
-              <i>{health.latencyMs || "—"} ms</i>
-            </strong>
-          </div>
-        </section>
-
-        <ol className="phase-strip" aria-label="比較実験の進行">
-          {PHASES.map((item, index) => (
-            <li
-              key={item.code}
-              className={`${index < phase ? "is-complete" : ""} ${
-                index === phase ? "is-active" : ""
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() => choosePhase(index)}
-                aria-current={index === phase ? "step" : undefined}
-              >
-                <b>{index + 1}</b>
-                <span>
-                  <strong>{item.label}</strong>
-                  <small>{item.short}</small>
-                </span>
-                {demo && index === phase && autoplay && !showDetails && (
-                  <i className="phase-progress" key={`progress-${phase}`} />
-                )}
-              </button>
-            </li>
-          ))}
-        </ol>
-
-        <section className={`stage stage--${phase + 1}`}>
-          {activeDropPoint && activeSummary ? (
-            <ConditionStage
-              dropPoint={activeDropPoint}
-              summary={activeSummary}
-              payloadBytes={payloadBytes}
-              minSuccessPercent={minSuccessPercent}
-              maxP95LatencyMs={maxP95LatencyMs}
-            />
-          ) : (
-            <CompareStage
-              summaries={summaries}
-              prediction={prediction}
-              minSuccessPercent={minSuccessPercent}
-              maxP95LatencyMs={maxP95LatencyMs}
-            />
-          )}
-          {showPrediction && (
-            <PredictionIntro
-              onChoose={choosePrediction}
-              onSkip={() => setShowPrediction(false)}
-            />
-          )}
-        </section>
-
-        <footer className="demo-controls">
-          <div>
-            <span>{phase + 1} / 4</span>
-            <strong>{PHASES[phase].label}</strong>
-          </div>
-          {demo && (
-            <p>
-              この公開ページの数値はサンプルです。展示ではRaspberry Piの実測値を表示します。
-            </p>
-          )}
-          <nav aria-label="画面の操作">
-            <button
-              type="button"
-              className="prediction-reset"
-              onClick={() => {
-                manualPhaseRef.current = false;
-                setPhase(0);
-                setPrediction(null);
-                setShowPrediction(true);
-              }}
-            >
-              予想から
-            </button>
-            <button
-              type="button"
-              onClick={() => choosePhase(phase - 1)}
-              disabled={phase === 0}
-            >
-              ← 前へ
-            </button>
-            {demo && (
-              <button
-                type="button"
-                className="autoplay-button"
-                onClick={() => setAutoplay(current => !current)}
-              >
-                {autoplay ? "一時停止" : "自動再生"} <kbd>Space</kbd>
-              </button>
+          <aside className={`showcase-winner ${invalid ? "is-invalid" : ""}`} aria-live="polite">
+            <span>{invalid ? "CHECK REQUIRED" : complete ? "RESULT" : "MEASURING"}</span>
+            {invalid ? (
+              <>
+                <b className="showcase-winner__state">再測定</b>
+                <strong>条件をそろえて確認</strong>
+              </>
+            ) : complete && best && bestMeta ? (
+              <>
+                <div className="showcase-winner__impact">
+                  <b>{ratio != null ? formatNumber(ratio, 1) : formatPps(best.maxMaintainedPps)}</b>
+                  <em>{ratio != null ? "× Application比" : "pps"}</em>
+                </div>
+                <strong>{bestMeta.plain}</strong>
+                <code>{bestMeta.technical} · {formatPps(best.maxMaintainedPps)} pps</code>
+              </>
+            ) : (
+              <>
+                <b className="showcase-winner__state">計測中</b>
+                <strong>{runs.length} run 受信</strong>
+              </>
             )}
-            <button
-              type="button"
-              onClick={() => choosePhase(phase + 1)}
-              disabled={phase === 3}
-            >
-              次へ →
-            </button>
-          </nav>
-        </footer>
+          </aside>
+        </section>
+
+
+        <RigView
+          selected={selected}
+          displayPps={displayedPps}
+          modeLabel={rigModeLabel}
+          loadLabel={loadLabel}
+          health={health}
+          payloadBytes={representative?.payload_bytes ?? 128}
+          xdpAttachMode={summaries.find(item => item.dropPoint === "xdp")?.attachMode ?? "unknown"}
+        />
+
+        <ScoreCards summaries={summaries} selected={selected} onSelect={setSelected} />
       </main>
 
+      <footer className="showcase-footer">
+        <p>入口で捨てるほど速い。代わりに、URLやユーザー状態は見られない。</p>
+      </footer>
+
       {showDetails && (
-        <div className="details-backdrop" role="presentation" onMouseDown={closeDetails}>
-          <section
-            className="details-panel"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="details-title"
-            onMouseDown={event => event.stopPropagation()}
-          >
-            <header>
-              <div>
-                <span>実験条件</span>
-                <h2 id="details-title">計測方法と判定基準</h2>
-              </div>
-              <button ref={closeButtonRef} type="button" onClick={closeDetails}>
-                閉じる <kbd>Esc</kbd>
-              </button>
-            </header>
-            <div className="details-grid">
-              <article>
-                <span>判定方法</span>
-                <h3>基準を満たした最大pps</h3>
-                <p>
-                  {formatPps(firstSweepRate)}から{formatPps(lastSweepRate)} ppsまで
-                  送信量を上げ、HTTP成功率{formatNumber(minSuccessPercent)}%以上かつ
-                  p95 {formatNumber(maxP95LatencyMs)}ms以下となった最大ppsを比較します。
-                </p>
-              </article>
-              <article>
-                <span>比較する条件</span>
-                <h3>送信量と破棄位置</h3>
-                <p>
-                  payload、1回の計測時間、HTTPの宛先、判定基準を固定し、
-                  Application / nftables / XDPを同じ送信量で比べます。
-                </p>
-              </article>
-              <article>
-                <span>実行順の偏り</span>
-                <h3>条件の順番を入れ替える</h3>
-                <p>
-                  反復ごとに3条件の開始位置をずらし、送信量は昇順と降順を
-                  交互にします。熱や実行順による偏りを抑えます。
-                </p>
-              </article>
-              <article>
-                <span>HTTPの計測</span>
-                <h3>成功率とp95</h3>
-                <p>
-                  負荷中は約200ms間隔で同じURLへリクエストを送り、成功率と
-                  応答時間の95パーセンタイルを記録します。
-                </p>
-              </article>
-              <article>
-                <span>送信量の確認</span>
-                <h3>目標ppsに達したか</h3>
-                <p>
-                  送信数と実時間から実送信ppsを計算し、目標の
-                  {representative?.sweep?.min_load_delivery_percent ?? 90}%未満なら
-                  「測定不成立」とします。CPU使用率とNET_RXは、結果を
-                  解釈するための参考値です。
-                </p>
-              </article>
-              <article>
-                <span>この実験の範囲</span>
-                <h3>破棄対象が分かっている通信</h3>
-                <p>
-                  この実験は防御製品の評価ではありません。入口に近いほど
-                  使える判断材料は少なく、アプリの文脈が必要な通信は
-                  同じ方法で判定できません。
-                </p>
-              </article>
-            </div>
-            <div className="environment-strip">
-              <span>計測環境</span>
-              <dl>
-                <div>
-                  <dt>Receiver</dt>
-                  <dd>{representative?.environment?.receiver_model || "unknown"}</dd>
-                </div>
-                <div>
-                  <dt>Kernel</dt>
-                  <dd>{representative?.environment?.kernel_release || "unknown"}</dd>
-                </div>
-                <div>
-                  <dt>NIC / MTU</dt>
-                  <dd>
-                    {representative?.environment?.network_interface || "unknown"} /{" "}
-                    {representative?.environment?.mtu ?? "unknown"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>CPU governor</dt>
-                  <dd>{representative?.environment?.cpu_governor || "unknown"}</dd>
-                </div>
-              </dl>
-            </div>
-          </section>
-        </div>
+        <DetailsDialog
+          onClose={closeDetails}
+          closeButtonRef={closeButtonRef}
+          representative={representative}
+          summaries={summaries}
+        />
       )}
     </div>
   );
