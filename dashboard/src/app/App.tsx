@@ -83,6 +83,7 @@ interface ConditionSummary {
   totalRuns: number;
   attachMode: string;
   nonMonotonic: boolean;
+  mixedAttachModes: boolean;
 }
 
 interface HealthState {
@@ -98,7 +99,6 @@ interface ConditionMeta {
   technicalLabel: string;
   description: string;
   savedWork: string;
-  stopLayer: "xdp" | "netfilter" | "application";
 }
 
 const DROP_POINTS: DropPoint[] = ["application", "netfilter", "xdp"];
@@ -115,7 +115,6 @@ const CONDITION_META: Record<DropPoint, ConditionMeta> = {
     description:
       "UDPパケットを通常の受信経路でソケットまで届け、受信数を数えた後に破棄します。ほかの2条件と比べるための基準です。",
     savedWork: "省ける受信処理はありません。NICからUDP socketまで、通常の経路を通ります。",
-    stopLayer: "application",
   },
   netfilter: {
     order: "02",
@@ -125,7 +124,6 @@ const CONDITION_META: Record<DropPoint, ConditionMeta> = {
     description:
       "nftablesでUDP宛先ポート4000のdrop ruleを入れ、Netfilterのinput hookで破棄します。UDP socketには届きません。",
     savedWork: "アプリへの配送と、UDP socketで受信する処理を省きます。",
-    stopLayer: "netfilter",
   },
   xdp: {
     order: "03",
@@ -134,8 +132,7 @@ const CONDITION_META: Record<DropPoint, ConditionMeta> = {
     technicalLabel: "eBPF / XDP_DROP",
     description:
       "AyaでロードしたeBPFプログラムがUDP宛先ポート4000を判定し、XDP_DROPを返します。実際の位置はattach modeで変わります。",
-    savedWork: "native XDPなら、通常のLinux network stackとアプリへの配送をほぼ通しません。",
-    stopLayer: "xdp",
+    savedWork: "native XDPなら、通常のLinux network stackへ進ませず、アプリへの配送も行いません。",
   },
 };
 
@@ -277,6 +274,17 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
     const ppsSteps = [
       ...new Set(conditionRuns.map(run => run.target_pps)),
     ].sort((a, b) => a - b);
+    const observedAttachModes =
+      dropPoint === "xdp"
+        ? [
+            ...new Set(
+              conditionRuns
+                .map(run => run.xdp_attach_mode)
+                .filter(mode => mode === "native" || mode === "generic"),
+            ),
+          ]
+        : [];
+    const mixedAttachModes = observedAttachModes.length > 1;
 
     const rates = ppsSteps.map(targetPps => {
       const rateRuns = conditionRuns.filter(run => run.target_pps === targetPps);
@@ -285,7 +293,9 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
         serviceMaintained(run.service_health),
       ).length;
       const loadValid =
-        rateRuns.length > 0 && validRuns.length === rateRuns.length;
+        !mixedAttachModes &&
+        rateRuns.length > 0 &&
+        validRuns.length === rateRuns.length;
       const maintained =
         loadValid &&
         validRuns.length > 0 &&
@@ -342,8 +352,14 @@ function summarizeRuns(runs: ExperimentRun[]): ConditionSummary[] {
       maxMaintainedPps: limitResult?.actualPps ?? null,
       limitResult,
       totalRuns: conditionRuns.length,
-      attachMode: conditionRuns.at(-1)?.xdp_attach_mode ?? "unknown",
+      attachMode:
+        mixedAttachModes
+          ? `${observedAttachModes.join(" / ")}（混在）`
+          : observedAttachModes.at(0) ??
+            conditionRuns.at(-1)?.xdp_attach_mode ??
+            "unknown",
       nonMonotonic,
+      mixedAttachModes,
     };
   });
 }
@@ -369,10 +385,13 @@ function viewLabel(view: ViewId) {
 function statusLabel(status: RateStatus) {
   if (status === "maintained") return "サービス維持";
   if (status === "failed") return "基準外";
-  return "送信不足";
+  return "測定不成立";
 }
 
 function xdpModeDescription(mode: string) {
+  if (mode.includes("混在")) {
+    return "native XDPとgeneric XDPが混在しています。実行位置とコストが違うため、この状態では上限値を集計しません。";
+  }
   if (mode === "native") {
     return "native XDP：NIC driverの受信処理内で実行され、通常はskbを作る前に破棄します。";
   }
@@ -451,9 +470,11 @@ function ExperimentTabs({
 function ReceptionPath({
   dropPoint,
   attachMode,
+  payloadBytes,
 }: {
   dropPoint: DropPoint;
   attachMode: string;
+  payloadBytes: number;
 }) {
   const stopIndex =
     dropPoint === "xdp" ? 1 : dropPoint === "netfilter" ? 3 : 4;
@@ -463,7 +484,7 @@ function ReceptionPath({
       <div className="path-source">
         <small>Pi Aから送る実験用負荷</small>
         <strong>IPv4 / UDP :4000</strong>
-        <span>128 byte payload</span>
+        <span>{payloadBytes} byte payload</span>
       </div>
       <div className="path-arrow" aria-hidden="true">→</div>
       <div className="path-flow" aria-label="Raspberry Pi Bの受信経路">
@@ -558,11 +579,13 @@ function ConditionStage({
   minSuccessPercent,
   maxP95LatencyMs,
   minLoadDeliveryPercent,
+  payloadBytes,
 }: {
   summary: ConditionSummary;
   minSuccessPercent: number;
   maxP95LatencyMs: number;
   minLoadDeliveryPercent: number;
+  payloadBytes: number;
 }) {
   const meta = CONDITION_META[summary.dropPoint];
   const technicalNote =
@@ -597,6 +620,7 @@ function ConditionStage({
         <ReceptionPath
           dropPoint={summary.dropPoint}
           attachMode={summary.attachMode}
+          payloadBytes={payloadBytes}
         />
       </section>
 
@@ -616,13 +640,18 @@ function ConditionStage({
         <div className="sweep-legend" aria-label="判定の凡例">
           <span className="is-maintained"><i />サービス維持</span>
           <span className="is-failed"><i />HTTPが基準外</span>
-          <span className="is-unverified"><i />目標負荷を送れず測定不成立</span>
+          <span className="is-unverified"><i />送信量不足などで測定不成立</span>
         </div>
         <LimitMetrics
           summary={summary}
           minSuccessPercent={minSuccessPercent}
           maxP95LatencyMs={maxP95LatencyMs}
         />
+        {summary.mixedAttachModes && (
+          <div className="measurement-warning" role="status">
+            native XDPとgeneric XDPが同じ集計に含まれています。実行位置とコストが異なるため、XDP条件の上限値から除外しました。attach modeをそろえて再測定してください。
+          </div>
+        )}
         {summary.nonMonotonic && (
           <div className="measurement-warning" role="status">
             低い負荷で不合格になった後、高い負荷で再び合格しています。上限値として断定せず、再測定が必要です。
@@ -1100,6 +1129,7 @@ export default function App() {
             minSuccessPercent={minSuccessPercent}
             maxP95LatencyMs={maxP95LatencyMs}
             minLoadDeliveryPercent={minLoadDeliveryPercent}
+            payloadBytes={payloadBytes}
           />
         ) : (
           <section className="stage-card empty-stage">
