@@ -25,7 +25,7 @@ const HEALTH_DRAIN_TIME: Duration = Duration::from_secs(2);
 #[derive(Debug, Parser)]
 struct Opt {
     /// Pi Aで動くtraffic-nodeの制御API。
-    #[arg(long, default_value = "192.168.1.11:9030")]
+    #[arg(long, default_value = "127.0.0.1:9030")]
     traffic_control: String,
     /// Pi Bで動くxdp-helloの制御API。
     #[arg(long, default_value = "127.0.0.1:9020")]

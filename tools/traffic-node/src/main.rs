@@ -209,35 +209,50 @@ async fn spawn_control_server(
                 let (reader, mut writer) = socket.into_split();
                 let mut lines = BufReader::new(reader).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let request = serde_json::from_str::<serde_json::Value>(&line).ok();
+                    let request = match serde_json::from_str::<serde_json::Value>(&line) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            let response = json!({
+                                "ok": false,
+                                "error": "control API expects one JSON object per line",
+                            });
+                            let _ = writer.write_all(response.to_string().as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            continue;
+                        }
+                    };
                     let command = request
-                        .as_ref()
-                        .and_then(|value| value.get("command"))
+                        .get("command")
                         .and_then(|command| command.as_str())
                         .map(str::to_string)
-                        .unwrap_or_else(|| line.trim().to_ascii_lowercase());
+                        .unwrap_or_default();
 
                     let (active, state_changed) = match command.as_str() {
                         "start" | "attack" => {
-                            if let Some(target_pps) = request
-                                .as_ref()
-                                .and_then(|value| value.get("target_pps"))
+                            let Some(target_pps) = request
+                                .get("target_pps")
                                 .and_then(serde_json::Value::as_u64)
-                            {
-                                if !(1..=100_000).contains(&target_pps) {
-                                    let response = json!({
-                                        "ok": false,
-                                        "error": "target_pps must be between 1 and 100000",
-                                    });
-                                    let _ = writer.write_all(response.to_string().as_bytes()).await;
-                                    let _ = writer.write_all(b"\n").await;
-                                    continue;
-                                }
-                                attack_pps.store(target_pps, Ordering::Relaxed);
+                            else {
+                                let response = json!({
+                                    "ok": false,
+                                    "error": "target_pps is required for start",
+                                });
+                                let _ = writer.write_all(response.to_string().as_bytes()).await;
+                                let _ = writer.write_all(b"\n").await;
+                                continue;
+                            };
+                            if !(1..=100_000).contains(&target_pps) {
+                                let response = json!({
+                                    "ok": false,
+                                    "error": "target_pps must be between 1 and 100000",
+                                });
+                                let _ = writer.write_all(response.to_string().as_bytes()).await;
+                                let _ = writer.write_all(b"\n").await;
+                                continue;
                             }
+                            attack_pps.store(target_pps, Ordering::Relaxed);
                             if request
-                                .as_ref()
-                                .and_then(|value| value.get("reset_health"))
+                                .get("reset_health")
                                 .and_then(serde_json::Value::as_bool)
                                 == Some(true)
                             {
