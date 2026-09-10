@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 【Mac のターミナルでのみ実行】Lima のシェル内では使えない（limactl がホスト側に必要）。
-# Mac ホストから Lima インスタンスの ~/packet-journey にリポジトリを同期する。
+# Mac ホストから Lima インスタンスの ~/packet-poipoi にリポジトリを同期する。
 # （共有マウントは書き込み不可のため、VM 内のホームにコピーしてビルドする流れ用）
-# cargo プロジェクト（eBPF 本体）は ~/packet-journey/xdp-hello/ 以下。
+# cargo プロジェクト（eBPF 本体）は ~/packet-poipoi/xdp-hello/ 以下。
 set -euo pipefail
 
 LIMA_INSTANCE="${LIMA_INSTANCE:-ubuntu-lts}"
@@ -48,20 +48,20 @@ fi
 
 limactl start "$LIMA_INSTANCE"
 
-echo "==> Sync $REPO_ROOT -> ${LIMA_INSTANCE}:~/packet-journey (excluding .git, xdp-hello/target)"
+echo "==> Sync $REPO_ROOT -> ${LIMA_INSTANCE}:~/packet-poipoi (excluding .git, xdp-hello/target)"
 tar -C "$REPO_ROOT" \
   --exclude='./.git' \
   --exclude='./xdp-hello/target' \
-  -cf - . | limactl shell "$LIMA_INSTANCE" -- bash -c 'mkdir -p "$HOME/packet-journey" && tar -xf - -C "$HOME/packet-journey"'
+  -cf - . | limactl shell "$LIMA_INSTANCE" -- bash -c 'mkdir -p "$HOME/packet-poipoi" && tar -xf - -C "$HOME/packet-poipoi"'
 
 if [[ "$DO_BUILD" -eq 1 ]]; then
   echo "==> cargo build --release (in VM)"
-  limactl shell "$LIMA_INSTANCE" -- bash -lc 'cd "$HOME/packet-journey/xdp-hello" && cargo build --release'
+  limactl shell "$LIMA_INSTANCE" -- bash -lc 'cd "$HOME/packet-poipoi/xdp-hello" && cargo build --release'
 fi
 
 if [[ "$DO_RUN" -eq 1 ]]; then
   echo "==> cargo run --release (in VM, sudo runner)"
-  limactl shell "$LIMA_INSTANCE" -- bash -lc 'cd "$HOME/packet-journey/xdp-hello" && RUST_LOG=info cargo run --release --config '"'"'target."cfg(all())".runner="sudo -E"'"'"''
+  limactl shell "$LIMA_INSTANCE" -- bash -lc 'cd "$HOME/packet-poipoi/xdp-hello" && RUST_LOG=info cargo run --release --config '"'"'target."cfg(all())".runner="sudo -E"'"'"''
 fi
 
 echo "==> Done."

@@ -4,9 +4,13 @@ use std::thread;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
-const EVENT_STREAM_ADDR: &str = "127.0.0.1:9010";
+const DEFAULT_EVENT_STREAM_ADDR: &str = "127.0.0.1:9010";
+const EVENT_STREAM_ENV: &str = "PACKET_POIPOI_STREAM_ADDR";
 
 fn spawn_packet_stream(app: tauri::AppHandle) {
+    let event_stream_addr =
+        std::env::var(EVENT_STREAM_ENV).unwrap_or_else(|_| DEFAULT_EVENT_STREAM_ADDR.to_string());
+
     thread::spawn(move || loop {
         let window = match app.get_webview_window("main") {
             Some(window) => window,
@@ -16,9 +20,9 @@ fn spawn_packet_stream(app: tauri::AppHandle) {
             }
         };
 
-        match TcpStream::connect(EVENT_STREAM_ADDR) {
+        match TcpStream::connect(&event_stream_addr) {
             Ok(stream) => {
-                let _ = window.emit("stream-status", "connected");
+                let _ = window.emit("stream-status", format!("connected {event_stream_addr}"));
                 let reader = BufReader::new(stream);
 
                 for line in reader.lines() {
@@ -32,7 +36,7 @@ fn spawn_packet_stream(app: tauri::AppHandle) {
                 }
             }
             Err(_) => {
-                let _ = window.emit("stream-status", "waiting");
+                let _ = window.emit("stream-status", format!("waiting {event_stream_addr}"));
                 thread::sleep(Duration::from_secs(1));
             }
         }

@@ -25,19 +25,14 @@ impl DropPoint {
 }
 
 /// XDPを実際にattachできたモード。要求値ではなく実行結果を記録する。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum XdpAttachMode {
     Native,
     Generic,
     NotUsed,
+    #[default]
     Unknown,
-}
-
-impl Default for XdpAttachMode {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// 実測値の解釈に必要なPi B側の実行環境。
@@ -124,7 +119,7 @@ impl SweepPlan {
             return Err(ExperimentRunError::InvalidLoadDeliveryThreshold);
         }
         if self.pps_steps.is_empty()
-            || self.pps_steps.iter().any(|pps| *pps == 0)
+            || self.pps_steps.contains(&0)
             || self.pps_steps.windows(2).any(|pair| pair[0] >= pair[1])
         {
             return Err(ExperimentRunError::InvalidSweepSteps);
@@ -225,9 +220,7 @@ impl ExperimentRun {
         if self.payload_bytes == 0 {
             return Err(ExperimentRunError::ZeroPayload);
         }
-        if !self.cpu_busy_percent.is_finite()
-            || !(0.0..=100.0).contains(&self.cpu_busy_percent)
-        {
+        if !self.cpu_busy_percent.is_finite() || !(0.0..=100.0).contains(&self.cpu_busy_percent) {
             return Err(ExperimentRunError::InvalidCpuPercent);
         }
         if self.packets_received_by_app > self.packets_sent {

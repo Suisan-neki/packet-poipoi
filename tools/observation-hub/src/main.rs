@@ -163,10 +163,7 @@ async fn serve_http_ping(socket: &mut TcpStream) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn spawn_ebpf_client(
-    source: String,
-    tx: broadcast::Sender<String>,
-) {
+fn spawn_ebpf_client(source: String, tx: broadcast::Sender<String>) {
     tokio::spawn(async move {
         loop {
             match TcpStream::connect(&source).await {
@@ -185,10 +182,7 @@ fn spawn_ebpf_client(
     });
 }
 
-async fn ingest_lines(
-    stream: TcpStream,
-    tx: broadcast::Sender<String>,
-) -> anyhow::Result<()> {
+async fn ingest_lines(stream: TcpStream, tx: broadcast::Sender<String>) -> anyhow::Result<()> {
     let mut lines = BufReader::new(stream).lines();
 
     while let Some(line) = lines.next_line().await? {

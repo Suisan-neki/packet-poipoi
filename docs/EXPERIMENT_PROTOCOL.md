@@ -36,7 +36,7 @@ XDPのactual attach modeもrunごとに保存する。
 ### Netfilter
 
 - XDP: monitor / pass
-- nftables: `inet packet_journey`のinput hookでUDP :4000をdrop
+- nftables: `inet packet_poipoi_experiment`のinput hookでUDP :4000をdrop
 - UDP socket: 同じsocketを維持し、到達しないことをcount
 
 ### XDP
@@ -147,14 +147,14 @@ dashboardでは実送信packet数で1万packetあたりへ正規化する。
 
 ## cleanup
 
-runnerは自分専用の`inet packet_journey` tableだけを操作する。
+runnerは自分専用の`inet packet_poipoi_experiment` tableだけを操作する。
 通常終了時とerror時に削除を試み、XDPをmonitorへ、traffic-nodeをstopへ戻す。
 
 異常終了後は次で確認する。
 
 ```bash
-sudo nft list table inet packet_journey
-sudo nft delete table inet packet_journey
+sudo nft list table inet packet_poipoi_experiment
+sudo nft delete table inet packet_poipoi_experiment
 ```
 
 ## 解釈上の制約

@@ -110,14 +110,38 @@ packetごとのlogでbenchmarkを汚しません。
 
 必要なもの:
 
-- Ethernet接続したRaspberry Pi 2台
-- Linux、Rust toolchain、nftables
-- Dashboard用のNode.jsとTauri prerequisites
+- Raspberry Pi OS 64-bit / Debian arm64 を入れた Raspberry Pi 2台
+- 2台のPiと展示PCをつなぐ、管理された隔離Ethernet LAN
+- 展示PCのNode.js、Rust toolchain、Tauri prerequisites
 
-自分が管理する隔離LANで実行してください。Step 1〜3は別terminalで起動したままにします。
+HTTP service under test は必ず Pi B の `observation-hub` 内で動かします。
+展示PCでは `observation-hub` を起動せず、Pi B の dashboard stream へ接続します。
+詳細なbring-up手順は [Hardware bring-up](docs/HARDWARE_BRINGUP.md) を参照してください。
+
+推奨の最短フロー:
+
+```bash
+cp scripts/packet-poipoi.env.example scripts/packet-poipoi.env
+# scripts/packet-poipoi.env の PI_A_IP / PI_B_IP / PI_A_HOST / PI_B_HOST を実LANへ合わせる
+source scripts/packet-poipoi.env
+
+ssh "$PI_A_HOST" 'bash -s' < scripts/pi-bootstrap.sh pi-a
+ssh "$PI_B_HOST" 'bash -s' < scripts/pi-bootstrap.sh pi-b
+
+BUILD_MODE=cross ROLE=pi-a PI_HOST="$PI_A_HOST" CONFIG_FILE=scripts/packet-poipoi.env ./scripts/pi-deploy.sh
+BUILD_MODE=cross ROLE=pi-b PI_HOST="$PI_B_HOST" CONFIG_FILE=scripts/packet-poipoi.env ./scripts/pi-deploy.sh
+
+ssh "$PI_B_HOST" '~/packet-poipoi-bin/pi-start.sh pi-b start'
+ssh "$PI_A_HOST" '~/packet-poipoi-bin/pi-start.sh pi-a start'
+./scripts/booth.sh
+ssh "$PI_B_HOST" '~/packet-poipoi-bin/pi-start.sh experiment start'
+```
+
+`traffic-node` は既定で loopback/private/link-local/CGNAT/ULA 宛先だけにUDP負荷を送ります。
+公開Internet宛ての高pps送信は拒否されます。実験は必ず自分が管理する隔離LANで実行してください。
 
 <details>
-<summary>起動コマンドを開く</summary>
+<summary>手動起動コマンドを開く</summary>
 
 ### 1. Pi B: event hubとHTTP service
 
@@ -177,7 +201,45 @@ sudo cargo run --release --manifest-path tools/Cargo.toml -p experiment-runner -
 ```bash
 cd dashboard
 npm install
-npm run tauri dev
+PACKET_POIPOI_STREAM_ADDR=<PI_B_IP>:9010 npm run tauri dev
+```
+
+`PACKET_POIPOI_STREAM_ADDR` を省略したときだけ、Dashboard は開発用に `127.0.0.1:9010` へ接続します。
+
+### Smoke test
+
+物理Piなしで pipeline を確認する場合:
+
+```bash
+./scripts/pi-smoke-test.sh
+```
+
+このsmokeは Linux VM 上で observation-hub の HTTP canary、traffic-node、experiment-runner、
+nftables 条件、dashboard stream を短時間で通します。XDP attach はfake control APIで置き換えるため、
+実NICへの native/generic attach は [hardware-only checklist](docs/HARDWARE_TODO.md) に残します。
+
+### Cleanup
+
+```bash
+ssh "$PI_A_HOST" '~/packet-poipoi-bin/pi-start.sh pi-a stop'
+ssh "$PI_B_HOST" '~/packet-poipoi-bin/pi-start.sh pi-b stop'
+sudo nft delete table inet packet_poipoi_experiment 2>/dev/null || true
+```
+
+### Dashboardだけ確認する
+
+```bash
+cd dashboard
+npm install
+npm run build:pages
+npm run preview:pages
+```
+
+### DashboardをPi Bへ接続する
+
+```bash
+cd dashboard
+PACKET_POIPOI_STREAM_ADDR=<PI_B_IP>:9010 npm run tauri dev
 ```
 
 </details>
@@ -196,12 +258,3 @@ npm run tauri dev
 - rate sweepは試した段階の間にある厳密な限界値までは特定しません。
 - 1台のPiで得た結果を、すべてのmachineやworkloadへ一般化しません。
 - Control APIに認証はありません。外部へ公開しないでください。
-
-## Dashboardだけ確認する
-
-```bash
-cd dashboard
-npm install
-npm run build:pages
-npm run preview:pages
-```

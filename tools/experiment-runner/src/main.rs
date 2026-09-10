@@ -1,8 +1,8 @@
 use anyhow::{bail, Context as _};
 use clap::Parser;
 use observation_core::{
-    DropPoint, ExperimentEnvironment, ExperimentRun, ServiceHealthSummary, StreamEvent,
-    SweepPlan, XdpAttachMode,
+    DropPoint, ExperimentEnvironment, ExperimentRun, ServiceHealthSummary, StreamEvent, SweepPlan,
+    XdpAttachMode,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -14,9 +14,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::signal;
 
 const NFT_FAMILY: &str = "inet";
-const NFT_TABLE: &str = "packet_journey";
+const NFT_TABLE: &str = "packet_poipoi_experiment";
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(3);
 const UDP_DRAIN_TIME: Duration = Duration::from_millis(100);
 const HEALTH_DRAIN_TIME: Duration = Duration::from_secs(2);
@@ -96,7 +97,10 @@ impl NftGuard {
         if output.status.success() || stderr_says_missing(&output.stderr) {
             return Ok(());
         }
-        bail!("failed to remove experiment nft table: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "failed to remove experiment nft table: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn enable(udp_port: u16) -> anyhow::Result<()> {
@@ -161,50 +165,23 @@ async fn main() -> anyhow::Result<()> {
         "load measurement valid = actual rate >= {}% of target",
         opt.min_load_delivery_percent,
     );
+    println!("cleanup target: nft table {NFT_FAMILY} {NFT_TABLE}, XDP monitor mode, traffic stop");
 
-    let experiment_result: anyhow::Result<()> = async {
-        for repetition in 1..=opt.repetitions {
-            for target_pps in rate_order(&pps_steps, repetition) {
-                for drop_point in condition_order(repetition) {
-                    let run = run_condition(
-                        &opt,
-                        &experiment_id,
-                        repetition,
-                        drop_point,
-                        target_pps,
-                        &received,
-                        &sink_failed,
-                        &environment,
-                        &sweep,
-                    )
-                    .await?;
-                    run.validate()
-                        .map_err(|error| anyhow::anyhow!("invalid experiment result: {error:?}"))?;
-                    publish_run(&opt.hub, &run).await?;
-                    let health = run
-                        .service_health
-                        .as_ref()
-                        .context("sweep result is missing service health")?;
-                    println!(
-                        "{} target={:>6}pps actual={:>7.0}pps ({:>5.1}%) r{}: HTTP={:.1}% p95={}ms maintained={} load_valid={} cpu={:.1}% NET_RX={}",
-                        drop_point.as_str(),
-                        target_pps,
-                        run.actual_pps(),
-                        run.load_delivery_percent(),
-                        repetition,
-                        health.success_percent(),
-                        health.latency_p95_ms,
-                        health.service_maintained(),
-                        run.load_rate_achieved(),
-                        run.cpu_busy_percent,
-                        run.net_rx_softirq_delta
-                    );
-                }
-            }
+    let context = RunContext {
+        experiment_id: &experiment_id,
+        received: &received,
+        sink_failed: &sink_failed,
+        environment: &environment,
+        sweep: &sweep,
+    };
+
+    let experiment_result = tokio::select! {
+        result = run_experiment(&opt, &pps_steps, context) => result,
+        signal = signal::ctrl_c() => {
+            signal.context("failed to listen for SIGINT")?;
+            Err(anyhow::anyhow!("interrupted by SIGINT"))
         }
-        Ok(())
-    }
-    .await;
+    };
 
     let nft_cleanup = NftGuard::disable();
     let xdp_cleanup = set_xdp_mode(&opt.xdp_control, "monitor").await;
@@ -226,6 +203,51 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct RunContext<'a> {
+    experiment_id: &'a str,
+    received: &'a AtomicU64,
+    sink_failed: &'a AtomicBool,
+    environment: &'a ExperimentEnvironment,
+    sweep: &'a SweepPlan,
+}
+
+async fn run_experiment(
+    opt: &Opt,
+    pps_steps: &[u64],
+    context: RunContext<'_>,
+) -> anyhow::Result<()> {
+    for repetition in 1..=opt.repetitions {
+        for target_pps in rate_order(pps_steps, repetition) {
+            for drop_point in condition_order(repetition) {
+                let run = run_condition(opt, repetition, drop_point, target_pps, context).await?;
+                run.validate()
+                    .map_err(|error| anyhow::anyhow!("invalid experiment result: {error:?}"))?;
+                publish_run(&opt.hub, &run).await?;
+                let health = run
+                    .service_health
+                    .as_ref()
+                    .context("sweep result is missing service health")?;
+                println!(
+                    "{} target={:>6}pps actual={:>7.0}pps ({:>5.1}%) r{}: HTTP={:.1}% p95={}ms maintained={} load_valid={} cpu={:.1}% NET_RX={}",
+                    drop_point.as_str(),
+                    target_pps,
+                    run.actual_pps(),
+                    run.load_delivery_percent(),
+                    repetition,
+                    health.success_percent(),
+                    health.latency_p95_ms,
+                    health.service_maintained(),
+                    run.load_rate_achieved(),
+                    run.cpu_busy_percent,
+                    run.net_rx_softirq_delta
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn condition_order(repetition: u16) -> [DropPoint; 3] {
     let mut order = DropPoint::ALL;
     let rotation = usize::from(repetition.saturating_sub(1)) % order.len();
@@ -235,7 +257,7 @@ fn condition_order(repetition: u16) -> [DropPoint; 3] {
 
 fn rate_order(pps_steps: &[u64], repetition: u16) -> Vec<u64> {
     let mut order = pps_steps.to_vec();
-    if repetition % 2 == 0 {
+    if repetition & 1 == 0 {
         order.reverse();
     }
     order
@@ -261,22 +283,18 @@ fn parse_pps_steps(value: &str) -> anyhow::Result<Vec<u64>> {
 
 async fn run_condition(
     opt: &Opt,
-    experiment_id: &str,
     repetition: u16,
     drop_point: DropPoint,
     target_pps: u64,
-    received: &AtomicU64,
-    sink_failed: &AtomicBool,
-    environment: &ExperimentEnvironment,
-    sweep: &SweepPlan,
+    context: RunContext<'_>,
 ) -> anyhow::Result<ExperimentRun> {
-    if sink_failed.load(Ordering::Relaxed) {
+    if context.sink_failed.load(Ordering::Relaxed) {
         bail!("userspace UDP sink is not running");
     }
     let attach_mode = configure_drop_point(opt, drop_point).await?;
     tokio::time::sleep(Duration::from_secs(opt.settle_secs)).await;
 
-    let app_before = received.load(Ordering::Relaxed);
+    let app_before = context.received.load(Ordering::Relaxed);
     let cpu_before = read_cpu_snapshot()?;
     let softirq_before = read_net_rx_softirq()?;
 
@@ -284,8 +302,7 @@ async fn run_condition(
     let measurement_started = Instant::now();
     tokio::time::sleep(Duration::from_secs(opt.duration_secs)).await;
     traffic_command(&opt.traffic_control, "stop").await?;
-    let duration_ms =
-        u64::try_from(measurement_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let duration_ms = u64::try_from(measurement_started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let cpu_after = read_cpu_snapshot()?;
     let softirq_after = read_net_rx_softirq()?;
@@ -294,12 +311,13 @@ async fn run_condition(
     tokio::time::sleep(HEALTH_DRAIN_TIME).await;
     let traffic_after = traffic_command(&opt.traffic_control, "status").await?;
     tokio::time::sleep(UDP_DRAIN_TIME).await;
-    if sink_failed.load(Ordering::Relaxed) {
+    if context.sink_failed.load(Ordering::Relaxed) {
         bail!("userspace UDP sink failed during the experiment");
     }
-    let app_after = received.load(Ordering::Relaxed);
+    let app_after = context.received.load(Ordering::Relaxed);
     let run_id = format!(
-        "{experiment_id}-{}-{target_pps}pps-r{repetition}",
+        "{}-{}-{target_pps}pps-r{repetition}",
+        context.experiment_id,
         drop_point.as_str(),
     );
 
@@ -313,7 +331,7 @@ async fn run_condition(
     };
 
     Ok(ExperimentRun {
-        experiment_id: experiment_id.to_string(),
+        experiment_id: context.experiment_id.to_string(),
         run_id,
         repetition,
         drop_point,
@@ -327,9 +345,9 @@ async fn run_condition(
         cpu_busy_percent: cpu_busy_percent(cpu_before, cpu_after),
         net_rx_softirq_delta: softirq_after.saturating_sub(softirq_before),
         xdp_attach_mode: attach_mode,
-        environment: environment.clone(),
+        environment: context.environment.clone(),
         service_health: Some(service_health),
-        sweep: Some(sweep.clone()),
+        sweep: Some(context.sweep.clone()),
     })
 }
 
@@ -341,9 +359,7 @@ fn read_experiment_environment(interface: &str) -> ExperimentEnvironment {
         mtu: read_trimmed(&format!("/sys/class/net/{interface}/mtu"))
             .parse::<u32>()
             .ok(),
-        cpu_governor: read_trimmed(
-            "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
-        ),
+        cpu_governor: read_trimmed("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"),
     }
 }
 
@@ -351,9 +367,7 @@ fn read_trimmed(path: &str) -> String {
     fs::read_to_string(path)
         .map(|value| {
             value
-                .trim_matches(|character: char| {
-                    character == '\0' || character.is_whitespace()
-                })
+                .trim_matches(|character: char| character == '\0' || character.is_whitespace())
                 .to_string()
         })
         .unwrap_or_else(|_| "unknown".to_string())
@@ -440,9 +454,9 @@ fn parse_traffic_status(command: &str, value: &Value) -> anyhow::Result<TrafficS
         bail!("traffic-node rejected {command}: {value}");
     }
     Ok(TrafficStatus {
-        packets_sent: required_u64(&value, "packets_sent")?,
-        target_pps: required_u64(&value, "target_pps")?,
-        payload_bytes: u32::try_from(required_u64(&value, "payload_bytes")?)
+        packets_sent: required_u64(value, "packets_sent")?,
+        target_pps: required_u64(value, "target_pps")?,
+        payload_bytes: u32::try_from(required_u64(value, "payload_bytes")?)
             .context("payload_bytes does not fit in u32")?,
         health_checks: required_u64(value, "health_checks")?,
         health_successes: required_u64(value, "health_successes")?,
@@ -531,17 +545,20 @@ fn cpu_busy_percent(before: CpuSnapshot, after: CpuSnapshot) -> f32 {
 }
 
 fn read_net_rx_softirq() -> anyhow::Result<u64> {
-    let softirqs =
-        fs::read_to_string("/proc/softirqs").context("failed to read /proc/softirqs")?;
+    let softirqs = fs::read_to_string("/proc/softirqs").context("failed to read /proc/softirqs")?;
     parse_net_rx_softirq(&softirqs).context("NET_RX row was missing from /proc/softirqs")
 }
 
 fn parse_net_rx_softirq(softirqs: &str) -> Option<u64> {
-    let row = softirqs.lines().find(|line| line.trim_start().starts_with("NET_RX:"))?;
+    let row = softirqs
+        .lines()
+        .find(|line| line.trim_start().starts_with("NET_RX:"))?;
     row.split_whitespace()
         .skip(1)
         .map(str::parse::<u64>)
-        .try_fold(0_u64, |total, value| value.ok().map(|value| total.saturating_add(value)))
+        .try_fold(0_u64, |total, value| {
+            value.ok().map(|value| total.saturating_add(value))
+        })
 }
 
 fn run_nft_script(script: &str) -> anyhow::Result<()> {
@@ -559,7 +576,10 @@ fn run_nft_script(script: &str) -> anyhow::Result<()> {
         .write_all(script.as_bytes())?;
     let output = child.wait_with_output()?;
     if !output.status.success() {
-        bail!("failed to install experiment nft table: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "failed to install experiment nft table: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Ok(())
 }
@@ -582,16 +602,21 @@ mod tests {
 
     #[test]
     fn parses_linux_cpu_counters() {
-        let snapshot =
-            parse_cpu_snapshot("cpu  10 2 3 40 5 0 0 0 100 50\ncpu0 1 1 1 1").unwrap();
+        let snapshot = parse_cpu_snapshot("cpu  10 2 3 40 5 0 0 0 100 50\ncpu0 1 1 1 1").unwrap();
         assert_eq!(snapshot.total, 60);
         assert_eq!(snapshot.idle, 45);
     }
 
     #[test]
     fn computes_busy_cpu_from_counter_deltas() {
-        let before = CpuSnapshot { total: 100, idle: 70 };
-        let after = CpuSnapshot { total: 200, idle: 110 };
+        let before = CpuSnapshot {
+            total: 100,
+            idle: 70,
+        };
+        let after = CpuSnapshot {
+            total: 200,
+            idle: 110,
+        };
         assert_eq!(cpu_busy_percent(before, after), 60.0);
     }
 
@@ -639,9 +664,8 @@ mod tests {
     fn trims_device_tree_null_terminator() {
         let value = "Raspberry Pi 5 Model B Rev 1.0\0\n";
         assert_eq!(
-            value.trim_matches(|character: char| {
-                character == '\0' || character.is_whitespace()
-            }),
+            value
+                .trim_matches(|character: char| { character == '\0' || character.is_whitespace() }),
             "Raspberry Pi 5 Model B Rev 1.0"
         );
     }

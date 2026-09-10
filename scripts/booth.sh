@@ -1,51 +1,30 @@
 #!/usr/bin/env bash
-# 展示側: observation-hub + Tauri dashboardを起動する。
+# 展示側PC: Pi B の observation-hub へ接続する Tauri dashboardを起動する。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TOOLS_DIR="$REPO_ROOT/tools"
 DASHBOARD_DIR="$REPO_ROOT/dashboard"
-START_DASHBOARD=1
+CONFIG_FILE="${CONFIG_FILE:-$REPO_ROOT/scripts/packet-poipoi.env}"
 
-if [[ "${1:-}" == "--no-dashboard" ]]; then
-  START_DASHBOARD=0
-elif [[ $# -gt 0 ]]; then
-  echo "Usage: $0 [--no-dashboard]" >&2
+if [[ $# -gt 0 ]]; then
+  echo "Usage: CONFIG_FILE=./scripts/packet-poipoi.env $0" >&2
   exit 1
 fi
 
-cleanup() {
-  [[ -n "${HUB_PID:-}" ]] && kill "$HUB_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
 
-cargo build --release --manifest-path "$TOOLS_DIR/Cargo.toml" \
-  -p observation-hub \
-  -p experiment-runner
-
-"$TOOLS_DIR/target/release/observation-hub" \
-  --event-listen 0.0.0.0:9001 \
-  --http-listen 0.0.0.0:8080 &
-HUB_PID=$!
-
-LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-LAN_IP="${LAN_IP:-127.0.0.1}"
+PI_B_IP="${PI_B_IP:-192.168.50.20}"
+export PACKET_POIPOI_STREAM_ADDR="${PACKET_POIPOI_STREAM_ADDR:-${PI_B_IP}:9010}"
 
 echo ""
 echo "パケットぽいぽい booth:"
-echo "  dashboard stream : 127.0.0.1:9010"
-echo "  event ingest     : ${LAN_IP}:9001"
-echo "  HTTP canary      : http://${LAN_IP}:8080/api/ping"
+echo "  dashboard stream : ${PACKET_POIPOI_STREAM_ADDR}"
+echo "  Pi B event ingest: ${PI_B_IP}:9001"
+echo "  Pi B HTTP canary : http://${PI_B_IP}:8080/api/ping"
 echo ""
-echo "Pi Bで比較実験を開始:"
-echo "  sudo $TOOLS_DIR/target/release/experiment-runner \\"
-echo "    --traffic-control <PI_A_IP>:9030 --xdp-control 127.0.0.1:9020"
-echo ""
-
-if [[ "$START_DASHBOARD" -eq 1 ]]; then
-  cd "$DASHBOARD_DIR"
-  npm install
-  npm run tauri dev
-else
-  wait "$HUB_PID"
-fi
+cd "$DASHBOARD_DIR"
+npm install
+npm run tauri dev
