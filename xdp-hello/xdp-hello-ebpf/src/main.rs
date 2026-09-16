@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use core::mem;
+
 use aya_ebpf::{
     bindings::{BPF_ANY, xdp_action},
     helpers::bpf_ktime_get_ns,
@@ -9,11 +11,10 @@ use aya_ebpf::{
     programs::XdpContext,
 };
 use aya_log_ebpf::warn;
-use core::mem;
 use xdp_hello_common::{
     CONFIG_BLOCKED_UDP_PORT_INDEX, CONFIG_MODE_INDEX, COUNTER_DROP_INDEX, COUNTER_PASS_INDEX,
-    EVENT_KIND_FLOW, EVENT_KIND_RATE_ALERT, FlowEvent, PACKET_ACTION_DROP,
-    PACKET_ACTION_PASS, packet_action, should_emit_flow_sample,
+    EVENT_KIND_FLOW, EVENT_KIND_RATE_ALERT, FlowEvent, PACKET_ACTION_DROP, PACKET_ACTION_PASS,
+    packet_action, should_emit_flow_sample,
 };
 
 const ETH_HDR_LEN: usize = 14;
@@ -88,14 +89,7 @@ fn try_xdp_hello(ctx: XdpContext) -> Result<u32, u32> {
     match protocol {
         IPPROTO_ICMP => {
             ptr_at::<u8>(&ctx, transport_offset)?;
-            record_packet(
-                src_addr,
-                dst_addr,
-                0,
-                0,
-                IPPROTO_ICMP,
-                PACKET_ACTION_PASS,
-            );
+            record_packet(src_addr, dst_addr, 0, 0, IPPROTO_ICMP, PACKET_ACTION_PASS);
         }
         IPPROTO_TCP => {
             let ports = ptr_at::<[u8; 4]>(&ctx, transport_offset)? as *const u8;

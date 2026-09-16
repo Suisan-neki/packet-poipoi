@@ -16,12 +16,7 @@ pub const CONFIG_BLOCKED_UDP_PORT_INDEX: u32 = 1;
 pub const COUNTER_PASS_INDEX: u32 = 0;
 pub const COUNTER_DROP_INDEX: u32 = 1;
 
-pub const fn packet_action(
-    mode: u32,
-    protocol: u8,
-    dst_port: u16,
-    blocked_udp_port: u32,
-) -> u8 {
+pub const fn packet_action(mode: u32, protocol: u8, dst_port: u16, blocked_udp_port: u32) -> u8 {
     const IPPROTO_UDP: u8 = 17;
 
     if mode == DEFENSE_MODE_PROTECT

@@ -37,7 +37,14 @@ badgeとfooterでサンプルであることを明示し、実測値として扱
 npm run tauri dev
 ```
 
-Tauri版は`127.0.0.1:9010`のNDJSON streamを購読します。
+Tauri版は環境変数`PACKET_POIPOI_STREAM_ADDR`のNDJSON streamを購読します。
+展示PCからPi Bへ接続する例:
+
+```shell
+PACKET_POIPOI_STREAM_ADDR=192.168.50.20:9010 npm run tauri dev
+```
+
+未指定時だけ、ローカル開発用に`127.0.0.1:9010`へ接続します。
 各drop point・各rateで`SweepPlan.repetitions`ぶんのrunがそろうと比較画面へ進みます。
 
 ## Port

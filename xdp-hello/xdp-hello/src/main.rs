@@ -1,17 +1,26 @@
 use anyhow::Context as _;
-use aya::maps::{Array, PerCpuArray, RingBuf};
-use aya::programs::{Xdp, XdpFlags};
+use aya::{
+    maps::{Array, PerCpuArray, RingBuf},
+    programs::{Xdp, XdpFlags},
+};
 use clap::{Parser, ValueEnum};
 #[rustfmt::skip]
 use log::{debug, warn};
-use std::mem::size_of;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpListener;
-use tokio::signal;
-use tokio::sync::{Mutex, broadcast};
+use std::{
+    mem::size_of,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+    time::Duration,
+};
+
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::TcpListener,
+    signal,
+    sync::{Mutex, broadcast},
+};
 use xdp_hello_common::{
     CONFIG_BLOCKED_UDP_PORT_INDEX, CONFIG_MODE_INDEX, COUNTER_DROP_INDEX, COUNTER_PASS_INDEX,
     DEFENSE_MODE_MONITOR, DEFENSE_MODE_PROTECT, EVENT_KIND_RATE_ALERT, FlowEvent,
@@ -332,7 +341,9 @@ async fn spawn_control_server(
 
                     let Some(mode) = DefenseMode::parse(&requested) else {
                         let _ = writer
-                            .write_all(b"{\"ok\":false,\"error\":\"mode must be monitor or protect\"}\n")
+                            .write_all(
+                                b"{\"ok\":false,\"error\":\"mode must be monitor or protect\"}\n",
+                            )
                             .await;
                         continue;
                     };
@@ -424,10 +435,7 @@ fn spawn_stats_ticker(
     });
 }
 
-fn sum_counter(
-    counters: &PerCpuArray<aya::maps::MapData, u64>,
-    index: u32,
-) -> u64 {
+fn sum_counter(counters: &PerCpuArray<aya::maps::MapData, u64>, index: u32) -> u64 {
     counters
         .get(&index, 0)
         .map(|values| values.iter().copied().sum())

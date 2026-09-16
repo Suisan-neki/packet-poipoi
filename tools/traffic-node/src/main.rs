@@ -1,12 +1,14 @@
 use anyhow::Context as _;
 use clap::Parser;
 use serde_json::json;
+use std::io::IsTerminal as _;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::time::{Instant, MissedTickBehavior, timeout};
+use tokio::time::{timeout, Instant, MissedTickBehavior};
 
 const ATTACK_PAYLOAD_BYTES: usize = 128;
 
@@ -39,6 +41,9 @@ struct Opt {
     /// experiment-runnerから負荷を開始・停止する制御API。
     #[arg(long, default_value = "127.0.0.1:9030")]
     control_listen: String,
+    /// 管理された隔離LAN以外へ高pps UDPを送る場合だけ明示する。
+    #[arg(long, default_value_t = false)]
+    allow_public_target: bool,
 }
 
 #[derive(Debug, Default)]
@@ -87,16 +92,13 @@ struct HealthSummary {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Arc::new(Opt::parse());
+    validate_private_target(&opt.target, opt.http_port, opt.allow_public_target)?;
     let attack_active = Arc::new(AtomicBool::new(false));
     let attack_pps = Arc::new(AtomicU64::new(opt.attack_pps.clamp(1, 100_000)));
     let packets_sent = Arc::new(AtomicU64::new(0));
     let health_window = Arc::new(Mutex::new(HealthWindow::default()));
 
-    spawn_health_worker(
-        opt.clone(),
-        attack_active.clone(),
-        health_window.clone(),
-    );
+    spawn_health_worker(opt.clone(), attack_active.clone(), health_window.clone());
     spawn_attack_worker(
         opt.clone(),
         attack_active.clone(),
@@ -114,10 +116,24 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     println!("traffic-node:");
-    println!("  normal HTTP: http://{}:{}/api/ping", opt.target, opt.http_port);
-    println!("  attack UDP:  {}:{} ({} pps)", opt.target, opt.attack_port, opt.attack_pps);
+    println!(
+        "  normal HTTP: http://{}:{}/api/ping",
+        opt.target, opt.http_port
+    );
+    println!(
+        "  attack UDP:  {}:{} ({} pps)",
+        opt.target, opt.attack_port, opt.attack_pps
+    );
+    println!(
+        "  safety: public target allowed = {}",
+        opt.allow_public_target
+    );
     println!("commands: attack | stop | monitor | protect | status | quit");
     println!("experiment control: {}", opt.control_listen);
+
+    if !std::io::stdin().is_terminal() {
+        std::future::pending::<()>().await;
+    }
 
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
@@ -193,36 +209,50 @@ async fn spawn_control_server(
                 let (reader, mut writer) = socket.into_split();
                 let mut lines = BufReader::new(reader).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let request = serde_json::from_str::<serde_json::Value>(&line).ok();
+                    let request = match serde_json::from_str::<serde_json::Value>(&line) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            let response = json!({
+                                "ok": false,
+                                "error": "control API expects one JSON object per line",
+                            });
+                            let _ = writer.write_all(response.to_string().as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            continue;
+                        }
+                    };
                     let command = request
-                        .as_ref()
-                        .and_then(|value| value.get("command"))
+                        .get("command")
                         .and_then(|command| command.as_str())
                         .map(str::to_string)
-                        .unwrap_or_else(|| line.trim().to_ascii_lowercase());
+                        .unwrap_or_default();
 
                     let (active, state_changed) = match command.as_str() {
                         "start" | "attack" => {
-                            if let Some(target_pps) = request
-                                .as_ref()
-                                .and_then(|value| value.get("target_pps"))
+                            let Some(target_pps) = request
+                                .get("target_pps")
                                 .and_then(serde_json::Value::as_u64)
-                            {
-                                if !(1..=100_000).contains(&target_pps) {
-                                    let response = json!({
-                                        "ok": false,
-                                        "error": "target_pps must be between 1 and 100000",
-                                    });
-                                    let _ =
-                                        writer.write_all(response.to_string().as_bytes()).await;
-                                    let _ = writer.write_all(b"\n").await;
-                                    continue;
-                                }
-                                attack_pps.store(target_pps, Ordering::Relaxed);
+                            else {
+                                let response = json!({
+                                    "ok": false,
+                                    "error": "target_pps is required for start",
+                                });
+                                let _ = writer.write_all(response.to_string().as_bytes()).await;
+                                let _ = writer.write_all(b"\n").await;
+                                continue;
+                            };
+                            if !(1..=100_000).contains(&target_pps) {
+                                let response = json!({
+                                    "ok": false,
+                                    "error": "target_pps must be between 1 and 100000",
+                                });
+                                let _ = writer.write_all(response.to_string().as_bytes()).await;
+                                let _ = writer.write_all(b"\n").await;
+                                continue;
                             }
+                            attack_pps.store(target_pps, Ordering::Relaxed);
                             if request
-                                .as_ref()
-                                .and_then(|value| value.get("reset_health"))
+                                .get("reset_health")
                                 .and_then(serde_json::Value::as_bool)
                                 == Some(true)
                             {
@@ -291,9 +321,8 @@ fn spawn_health_worker(
     health_window: Arc<Mutex<HealthWindow>>,
 ) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(
-            opt.health_interval_ms.max(100),
-        ));
+        let mut interval =
+            tokio::time::interval(Duration::from_millis(opt.health_interval_ms.max(100)));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
@@ -400,9 +429,8 @@ async fn probe_http(host: &str, port: u16, timeout_ms: u64) -> anyhow::Result<u1
         let mut stream = TcpStream::connect((host, port))
             .await
             .with_context(|| format!("failed to connect to {host}:{port}"))?;
-        let request = format!(
-            "GET /api/ping HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
-        );
+        let request =
+            format!("GET /api/ping HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
         stream.write_all(request.as_bytes()).await?;
 
         let mut response = vec![0_u8; 1024];
@@ -435,11 +463,45 @@ fn percentile(values: &[u64], percentile: usize) -> u64 {
     }
     let mut sorted = values.to_vec();
     sorted.sort_unstable();
-    let rank = percentile
-        .saturating_mul(sorted.len())
-        .saturating_add(99)
-        / 100;
+    let rank = percentile.saturating_mul(sorted.len()).saturating_add(99) / 100;
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+}
+
+fn validate_private_target(host: &str, port: u16, allow_public_target: bool) -> anyhow::Result<()> {
+    if allow_public_target {
+        return Ok(());
+    }
+
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .with_context(|| format!("failed to resolve target host {host}"))?
+        .map(|addr| addr.ip())
+        .collect::<Vec<_>>();
+
+    if addrs.is_empty() {
+        anyhow::bail!("target host {host} did not resolve to an IP address");
+    }
+    if addrs.iter().all(|addr| is_private_or_local(*addr)) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "refusing to send UDP load to non-private target {host}; use a managed isolated LAN or pass --allow-public-target explicitly"
+    );
+}
+
+fn is_private_or_local(addr: IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(addr) => {
+            addr.is_private()
+                || addr.is_loopback()
+                || addr.is_link_local()
+                || addr.octets()[0] == 100 && (64..=127).contains(&addr.octets()[1])
+        }
+        IpAddr::V6(addr) => {
+            addr.is_loopback() || addr.is_unique_local() || addr.is_unicast_link_local()
+        }
+    }
 }
 
 async fn publish_attack_state(opt: &Opt, active: bool, packets_sent: u64, pps: u64) {
@@ -503,5 +565,14 @@ mod tests {
         window.reset();
         window.record(previous_generation, true, 12);
         assert_eq!(window.summary().checks, 0);
+    }
+
+    #[test]
+    fn allows_only_private_or_local_targets_by_default() {
+        assert!(validate_private_target("127.0.0.1", 8080, false).is_ok());
+        assert!(validate_private_target("10.0.0.1", 8080, false).is_ok());
+        assert!(validate_private_target("192.168.50.20", 8080, false).is_ok());
+        assert!(validate_private_target("8.8.8.8", 8080, false).is_err());
+        assert!(validate_private_target("8.8.8.8", 8080, true).is_ok());
     }
 }

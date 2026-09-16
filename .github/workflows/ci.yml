@@ -13,15 +13,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install runtime test tools
+        run: sudo apt-get update && sudo apt-get install -y nftables
+      - name: Format observation core
+        run: cargo fmt --manifest-path observation-core/Cargo.toml --all --check
+      - name: Format tools
+        run: cargo fmt --manifest-path tools/Cargo.toml --all --check
+      - name: Clippy observation core
+        run: cargo clippy --manifest-path observation-core/Cargo.toml --all-targets -- -D warnings
+      - name: Clippy tools
+        run: cargo clippy --manifest-path tools/Cargo.toml --all-targets -- -D warnings
       - name: Test observation core
         run: cargo test --manifest-path observation-core/Cargo.toml
       - name: Test tools
         run: cargo test --manifest-path tools/Cargo.toml
+      - name: Smoke Pi A to Pi B pipeline
+        run: ./scripts/pi-smoke-test.sh
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n scripts/*.sh
 
   dashboard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Tauri Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libjavascriptcoregtk-4.1-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -33,6 +71,11 @@ jobs:
       - name: Build
         working-directory: dashboard
         run: npm run build
+      - name: Build Tauri app
+        working-directory: dashboard
+        env:
+          PACKET_POIPOI_STREAM_ADDR: 192.168.50.20:9010
+        run: npm run tauri build -- --bundles deb
       - name: Upload dashboard preview
         uses: actions/upload-artifact@v4
         with:
@@ -44,13 +87,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install XDP build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev zstd
       - uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rust-src
+          components: rust-src, rustfmt, clippy
       - name: Install bpf-linker
-        run: cargo install bpf-linker
+        run: INSTALL_DIR="$HOME/.cargo/bin" ./scripts/install-bpf-linker.sh
+      - name: Format XDP workspace
+        run: cargo +nightly fmt --manifest-path xdp-hello/Cargo.toml --all --check
+      - name: Clippy XDP user/shared code
+        run: cargo +nightly clippy --manifest-path xdp-hello/Cargo.toml -p xdp-hello-common -p xdp-hello --all-targets -- -D warnings
       - name: Test shared XDP policy
-        run: cargo test --manifest-path xdp-hello/Cargo.toml -p xdp-hello-common
-      - name: Build XDP workspace
-        run: cargo build --manifest-path xdp-hello/Cargo.toml
+        run: cargo +nightly test --manifest-path xdp-hello/Cargo.toml -p xdp-hello-common
+      - name: Build XDP loader with embedded eBPF
+        run: cargo +nightly build --manifest-path xdp-hello/Cargo.toml -p xdp-hello
+      - name: Build eBPF program target directly
+        env:
+          RUSTFLAGS: -C panic=abort
+        run: cargo +nightly build --manifest-path xdp-hello/Cargo.toml -p xdp-hello-ebpf --target bpfel-unknown-none -Z build-std=core --release
