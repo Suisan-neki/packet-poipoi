@@ -17,7 +17,7 @@
 - CPU busyとNET_RXを主結果にしていない理由
 - XDP native / genericを混ぜない理由
 - cleanupとrollbackが同じではない理由
-- この実験のどこがAKATSUKIへ再利用できるか
+- packet-poipoiで得た何を、現在のAKATSUKIへ持ち帰れそうか
 
 ## Phase 1: まず通信の道だけ理解する
 
@@ -214,7 +214,7 @@ XDPは同じコードでもattach方法によって通る経路が異なりま�
 
 です。
 
-ここでAKATSUKIとの違いを確認します。
+ここでは、cleanupと「本当に元へ戻ったことを確認すること」を区別します。
 
 ```text
 cleanup
@@ -225,31 +225,53 @@ rollback verification
 ```
 
 packet-poipoiは前者を持っていますが、後者はまだ十分ではありません。
+この区別は、現在のAKATSUKIで可逆性を考えるときにも重要になります。
 
 ### 自分で答える問い
 
 - cleanupコマンドが成功したら必ず元通りと言えるか
 - processやfileを実験対象にした場合、何を保存しないとrollbackを確認できないか
 
-## Phase 7: AKATSUKIへ接続する
+## Phase 7: 現在のAKATSUKIとの関係を整理する
 
 最後に `docs/AKATSUKI_BRIDGE.md` を読みます。
 
-ここで初めて、packet-poipoiの部品を一般化して考えます。
+packet-poipoiは、現在のAKATSUKIをそのまま小さく実装したものではありません。
+AKATSUKIの旧構想から、低レイヤで通信を観測し、介入位置を変えて比較する部分を切り出して技育博向けに発展させたスピンオフです。
+
+そのため、この段階で考えるのは「packet-poipoiをどうAKATSUKIへ一般化するか」ではなく、
+**今回の実装で得たどの技術・設計経験を、現在のAKATSUKIへ持ち帰れそうか**です。
+
+候補は次です。
 
 ```text
-traffic-node       → stimulus
-experiment-runner  → trial orchestrator
-observation-core   → evidence schema
-XDP / nftables     → observer / guard
-observation-hub    → event hub
-Dashboard          → operator view
+packet-poipoiで得るもの
+  ├─ Rust / AyaでeBPFをload・制御する経験
+  ├─ kernel側の計測値をuserspaceへ回収する経験
+  ├─ experiment-runnerによる実験手順の自動化
+  ├─ 条件・実測値・環境情報を分けて記録する設計
+  ├─ observation-hub / event streamによる観測結果の集約
+  └─ cleanupを実験ライフサイクルへ組み込む設計
+
+現在のAKATSUKI
+  └─ OSレベルの実行時挙動と、生じた変更・影響範囲・可逆性を評価する基盤
 ```
 
-ただし、この対応だけを見てすぐ抽象化しません。
+一方で、次はpacket-poipoi固有のものとして扱います。
 
-実機でExperiment 01を経験し、その後process / filesystemを扱うExperiment 02を作るときに、
-両方へ本当に必要だった部分だけをAKATSUKI側へ抽出します。
+- XDP / Netfilter / Applicationのどこで通信を止めるかという問い
+- UDP負荷そのもの
+- traffic-nodeを使ったネットワーク負荷生成
+- 「早く介入するか、後まで見て判断するか」をAKATSUKI全体の中心命題にすること
+
+共通基盤を先に決めません。
+現在のAKATSUKIで別の具体的な実験を作ったとき、packet-poipoiと本当に共通していた部分だけを抽出します。
+
+### 自分で答える問い
+
+- packet-poipoiの問いそのものと、再利用できそうな実装経験を分けて説明できるか
+- XDPのdrop処理を持ち込まなくても、eBPF/Ayaの経験がAKATSUKIで役立つのはなぜか
+- `experiment-runner` のどの考え方なら、network以外の実験でも使えそうか
 
 ## 実機へ進んでよい条件
 
@@ -262,7 +284,7 @@ Dashboard          → operator view
 5. target ppsとactual ppsの違いは何か
 6. 主結果がCPU使用率ではないのはなぜか
 7. cleanupとrollback verificationの違いは何か
-8. AKATSUKIへ再利用したい部分はどこか
+8. packet-poipoiの問いそのものではなく、何を現在のAKATSUKIへ持ち帰れそうか
 
 全部を完璧に答える必要はありません。
 分からない箇所が特定できた状態なら、そこを確認してから実機へ進みます。
