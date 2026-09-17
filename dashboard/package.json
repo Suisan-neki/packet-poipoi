@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
-    "build": "vite build",
-    "build:pages": "GITHUB_PAGES=true vite build",
+    "test": "node --test tests/model.test.mjs",
+    "check": "tsc --noEmit --jsx react-jsx --module ESNext --moduleResolution Bundler --target ES2022 --lib ES2022,DOM --allowJs src/app/App.tsx",
+    "build": "npm test && npm run check && vite build",
+    "build:pages": "npm test && npm run check && GITHUB_PAGES=true vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --open",
     "preview:pages": "npm run build:pages && vite preview --host 127.0.0.1 --port 4173 --open",
     "tauri": "tauri"
