@@ -14,7 +14,7 @@ use aya_log_ebpf::warn;
 use xdp_hello_common::{
     CONFIG_BLOCKED_UDP_PORT_INDEX, CONFIG_MODE_INDEX, COUNTER_DROP_INDEX, COUNTER_PASS_INDEX,
     EVENT_KIND_FLOW, EVENT_KIND_RATE_ALERT, FlowEvent, PACKET_ACTION_DROP, PACKET_ACTION_PASS,
-    packet_action, should_emit_flow_sample,
+    is_control_plane_flow, packet_action, should_emit_flow_sample,
 };
 
 const ETH_HDR_LEN: usize = 14;
@@ -84,17 +84,26 @@ fn try_xdp_hello(ctx: XdpContext) -> Result<u32, u32> {
     let protocol = read_u8(&ctx, IPV4_PROTOCOL_OFFSET)?;
     let src_addr = read_ipv4_addr(&ctx, IPV4_SRC_ADDR_OFFSET)?;
     let dst_addr = read_ipv4_addr(&ctx, IPV4_DST_ADDR_OFFSET)?;
-    detect_packet_rate(&ctx, dst_addr);
     let transport_offset = TRANSPORT_OFFSET_WITHOUT_IPV4_OPTIONS;
     match protocol {
         IPPROTO_ICMP => {
             ptr_at::<u8>(&ctx, transport_offset)?;
+            detect_packet_rate(&ctx, dst_addr);
             record_packet(src_addr, dst_addr, 0, 0, IPPROTO_ICMP, PACKET_ACTION_PASS);
         }
         IPPROTO_TCP => {
             let ports = ptr_at::<[u8; 4]>(&ctx, transport_offset)? as *const u8;
             let src_port = read_be_u16_at(ports);
             let dst_port = read_be_u16_at(unsafe { ports.add(2) });
+
+            // Dashboard stream / ingest / control / SSH を観測対象にすると、
+            // 観測イベントを送ったTCP通信へのACKを再び観測してイベント化する
+            // 自己観測ループが起きるため、実験トラフィックから分離する。
+            if is_control_plane_flow(IPPROTO_TCP, dst_port) {
+                return Ok(xdp_action::XDP_PASS);
+            }
+
+            detect_packet_rate(&ctx, dst_addr);
             record_packet(
                 src_addr,
                 dst_addr,
@@ -109,6 +118,7 @@ fn try_xdp_hello(ctx: XdpContext) -> Result<u32, u32> {
             let src_port = read_be_u16_at(ports);
             let dst_port = read_be_u16_at(unsafe { ports.add(2) });
             let action = udp_action(dst_port);
+            detect_packet_rate(&ctx, dst_addr);
             record_packet(src_addr, dst_addr, src_port, dst_port, IPPROTO_UDP, action);
             if action == PACKET_ACTION_DROP {
                 return Ok(xdp_action::XDP_DROP);
