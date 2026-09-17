@@ -1,0 +1,12 @@
+.tradeoff-board {
+  display: none;
+}
+
+.results-area__hint {
+  font-size: 0;
+}
+
+.results-area__hint::after {
+  content: "3パターンを押して、止める場所を切り替えられます。";
+  font-size: 0.66rem;
+}
