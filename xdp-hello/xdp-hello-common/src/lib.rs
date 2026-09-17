@@ -16,6 +16,18 @@ pub const CONFIG_BLOCKED_UDP_PORT_INDEX: u32 = 1;
 pub const COUNTER_PASS_INDEX: u32 = 0;
 pub const COUNTER_DROP_INDEX: u32 = 1;
 
+/// packet-poipoi 自身の観測・制御経路。
+///
+/// これらを XDP の可視化対象にすると、Dashboard stream の ACK を観測して
+/// 新しい flow event を生成し、その event への ACK をまた観測するという
+/// 自己観測ループを作れるため、実験トラフィックとは分離する。
+pub const fn is_control_plane_flow(protocol: u8, dst_port: u16) -> bool {
+    const IPPROTO_TCP: u8 = 6;
+
+    protocol == IPPROTO_TCP
+        && matches!(dst_port, 22 | 9000 | 9001 | 9010 | 9020 | 9030)
+}
+
 pub const fn packet_action(mode: u32, protocol: u8, dst_port: u16, blocked_udp_port: u32) -> u8 {
     const IPPROTO_UDP: u8 = 17;
 
@@ -39,6 +51,10 @@ pub const fn should_emit_flow_sample(
     packet_count: u64,
 ) -> bool {
     const IPPROTO_UDP: u8 = 17;
+
+    if is_control_plane_flow(protocol, dst_port) {
+        return false;
+    }
 
     protocol != IPPROTO_UDP
         || dst_port as u32 != blocked_udp_port
@@ -83,6 +99,16 @@ mod tests {
         assert!(should_emit_flow_sample(17, 4000, 4000, 65));
         assert!(should_emit_flow_sample(6, 4000, 4000, 2));
         assert!(should_emit_flow_sample(17, 4001, 4000, 2));
+    }
+
+    #[test]
+    fn control_plane_tcp_is_not_emitted() {
+        for port in [22, 9000, 9001, 9010, 9020, 9030] {
+            assert!(is_control_plane_flow(6, port));
+            assert!(!should_emit_flow_sample(6, port, 4000, 1));
+        }
+        assert!(!is_control_plane_flow(6, 8080));
+        assert!(!is_control_plane_flow(17, 9010));
     }
 
     #[test]
