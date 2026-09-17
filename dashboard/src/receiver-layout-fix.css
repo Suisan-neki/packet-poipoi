@@ -1,0 +1,65 @@
+/* Keep the conceptual illustration consistent: Pi A is a client PC,
+   while Pi B is represented as a server rather than a Raspberry Pi board. */
+.device-illustration--receiver {
+  width: 76px;
+  height: 70px;
+  filter: drop-shadow(0 9px 11px rgba(31, 59, 86, 0.14));
+}
+
+.device-illustration--receiver .device-illustration__board {
+  position: absolute;
+  inset: 3px 8px;
+  border: 2px solid #49627a;
+  border-radius: 7px;
+  background:
+    linear-gradient(to bottom,
+      transparent 31%, #c6d4df 31%, #c6d4df 33%, transparent 33%,
+      transparent 65%, #c6d4df 65%, #c6d4df 67%, transparent 67%),
+    linear-gradient(145deg, #f8fbfd, #dce8f1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.8);
+}
+
+.device-illustration--receiver .device-illustration__board::before {
+  position: absolute;
+  top: 11px;
+  left: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #20a67d;
+  box-shadow: 0 20px 0 #20a67d, 0 40px 0 #20a67d;
+  content: "";
+}
+
+.device-illustration--receiver .device-illustration__board::after {
+  position: absolute;
+  top: 11px;
+  right: 9px;
+  width: 29px;
+  height: 5px;
+  border-radius: 999px;
+  background: #8397aa;
+  box-shadow: 0 20px 0 #8397aa, 0 40px 0 #8397aa;
+  content: "";
+}
+
+.device-illustration--receiver .device-illustration__chip,
+.device-illustration--receiver .device-illustration__port {
+  display: none;
+}
+
+/* The processing path is shared by both the red unwanted traffic and the
+   blue service traffic, so place it visually between their two arrows. */
+.network-device--receiver {
+  position: relative;
+}
+
+.receiver-body {
+  margin-top: 74px;
+}
+
+@media (max-width: 1100px) {
+  .receiver-body {
+    margin-top: 42px;
+  }
+}
