@@ -74,24 +74,28 @@ const CONDITION_META: Record<DropPoint, {
   label: string;
   technical: string;
   stage: string;
+  balanceLabel: string;
 }> = {
   xdp: {
     number: "1",
     label: "入口で止める",
     technical: "XDP",
     stage: "xdp",
+    balanceLabel: "安全性寄り",
   },
   netfilter: {
     number: "2",
     label: "途中で止める",
     technical: "Netfilter",
     stage: "netfilter",
+    balanceLabel: "中間",
   },
   application: {
     number: "3",
     label: "届いてから止める",
     technical: "Application",
     stage: "application",
+    balanceLabel: "通信可用性寄り",
   },
 };
 
@@ -224,8 +228,20 @@ function formatPps(value: number | null) {
 }
 
 function DeviceIllustration({ kind }: { kind: "sender" | "receiver" }) {
+  if (kind === "sender") {
+    return (
+      <div className="computer-illustration" aria-hidden="true">
+        <span className="computer-illustration__screen">
+          <i />
+        </span>
+        <span className="computer-illustration__hinge" />
+        <span className="computer-illustration__base" />
+      </div>
+    );
+  }
+
   return (
-    <div className={`device-illustration device-illustration--${kind}`} aria-hidden="true">
+    <div className="device-illustration device-illustration--receiver" aria-hidden="true">
       <span className="device-illustration__board" />
       <span className="device-illustration__chip" />
       <span className="device-illustration__port device-illustration__port--1" />
@@ -234,10 +250,23 @@ function DeviceIllustration({ kind }: { kind: "sender" | "receiver" }) {
   );
 }
 
-function ResultCard({ summary, selected }: { summary: ConditionSummary; selected: DropPoint }) {
+function ResultCard({
+  summary,
+  selected,
+  onSelect,
+}: {
+  summary: ConditionSummary;
+  selected: DropPoint;
+  onSelect: (dropPoint: DropPoint) => void;
+}) {
   const meta = CONDITION_META[summary.dropPoint];
   return (
-    <article className={`result-card result-card--${summary.dropPoint} ${selected === summary.dropPoint ? "is-current" : ""}`}>
+    <button
+      type="button"
+      className={`result-card result-card--${summary.dropPoint} ${selected === summary.dropPoint ? "is-current" : ""}`}
+      aria-pressed={selected === summary.dropPoint}
+      onClick={() => onSelect(summary.dropPoint)}
+    >
       <div className="result-card__title">
         <b>{meta.number}</b>
         <div>
@@ -256,10 +285,10 @@ function ResultCard({ summary, selected }: { summary: ConditionSummary; selected
             <span>p95 {formatNumber(summary.limitResult.latencyP95Ms, 0)} ms</span>
           </>
         ) : (
-          <span>まだ計測していません</span>
+          <span>クリックしてこの条件を見る</span>
         )}
       </div>
-    </article>
+    </button>
   );
 }
 
@@ -274,6 +303,7 @@ export default function App() {
   });
   const [livePps, setLivePps] = useState(demo ? 20_000 : 0);
   const [attachMode, setAttachMode] = useState(demo ? "generic" : "unknown");
+  const [selected, setSelected] = useState<DropPoint>(demo ? "xdp" : "application");
 
   useEffect(() => {
     let disposed = false;
@@ -316,6 +346,7 @@ export default function App() {
               run,
             ];
           });
+          setSelected(run.drop_point);
           if (run.xdp_attach_mode === "native" || run.xdp_attach_mode === "generic") {
             setAttachMode(run.xdp_attach_mode);
           }
@@ -334,7 +365,6 @@ export default function App() {
 
   const summaries = useMemo(() => summarizeRuns(runs), [runs]);
   const latestRun = runs.at(-1);
-  const selected: DropPoint = latestRun?.drop_point ?? (demo ? "xdp" : "application");
   const selectedMeta = CONDITION_META[selected];
   const representative = latestRun;
   const ppsSteps = representative?.sweep?.pps_steps ?? SAMPLE_PPS_STEPS;
@@ -369,15 +399,15 @@ export default function App() {
       <section className="exhibit-intro">
         <div className="exhibit-intro__copy">
           <span className="exhibit-kicker">packet-poipoi</span>
-          <h1>どこで止めるのが、ちょうどいい？</h1>
-          <p>いらない通信を止めて、守りたいサービスを守る。でも、早く止めるほどいいとは限らない。</p>
+          <h1>安全性 ↔︎ 通信可用性</h1>
+          <p>不要な通信を止めやすい安全性と、必要な通信を残しやすい通信可用性。そのバランスを実機で比べる。</p>
         </div>
         <aside className="exhibit-guide">
           <strong>この展示でわかること</strong>
           <ol>
             <li><b>1</b><span>ネットワークのどこで通信を止められるのか</span></li>
             <li><b>2</b><span>早く止めることのメリット・デメリット</span></li>
-            <li><b>3</b><span>どこが“ちょうどいい”のかを実機で確かめる</span></li>
+            <li><b>3</b><span>止める場所で安全性と通信可用性がどう変わるのか</span></li>
           </ol>
         </aside>
       </section>
@@ -450,22 +480,28 @@ export default function App() {
           <h2>もっと早く止めると…</h2>
           <ul>
             <li className="good">処理の負荷が少ない</li>
-            <li className="good">たくさんの通信もさばきやすい</li>
-            <li className="warn">判断できる情報が少なく、必要な通信まで止める可能性がある</li>
+            <li className="good">不要な通信を早く止めやすい</li>
+            <li className="warn">判断材料が少なく、必要な通信まで止める可能性がある</li>
           </ul>
         </article>
 
-        <div className="balance" aria-label="処理の軽さと判断材料の多さのバランス">
-          <div className="balance-pan balance-pan--left">
-            <span>処理の軽さ</span>
-            <small>パフォーマンス</small>
+        <div className={`balance balance--${selected}`} aria-label={`現在は${selectedMeta.balanceLabel}`}>
+          <div className="balance-motion">
+            <div className="balance-pan balance-pan--left">
+              <span>安全性</span>
+              <small>不要な通信を止めやすい</small>
+            </div>
+            <div className="balance-beam" />
+            <div className="balance-pan balance-pan--right">
+              <span>通信可用性</span>
+              <small>必要な通信を残しやすい</small>
+            </div>
           </div>
-          <div className="balance-beam" />
           <div className="balance-post" />
           <div className="balance-base" />
-          <div className="balance-pan balance-pan--right">
-            <span>判断材料の多さ</span>
-            <small>正確さ</small>
+          <div className="balance-current">
+            <strong>{selectedMeta.technical}</strong>
+            <span>{selectedMeta.balanceLabel}</span>
           </div>
         </div>
 
@@ -480,10 +516,18 @@ export default function App() {
         </article>
       </section>
 
-      <section className="results-strip" aria-label="3つの停止位置の比較結果">
-        {summaries.map(summary => (
-          <ResultCard key={summary.dropPoint} summary={summary} selected={selected} />
-        ))}
+      <section className="results-area" aria-label="停止位置を切り替える">
+        <p className="results-area__hint">3パターンを押して、止める場所と天秤の変化を切り替えられます。</p>
+        <div className="results-strip">
+          {summaries.map(summary => (
+            <ResultCard
+              key={summary.dropPoint}
+              summary={summary}
+              selected={selected}
+              onSelect={setSelected}
+            />
+          ))}
+        </div>
       </section>
 
       <footer className="exhibit-footer">
