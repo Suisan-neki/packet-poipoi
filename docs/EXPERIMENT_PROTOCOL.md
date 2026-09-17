@@ -137,8 +137,10 @@ dashboardでは実送信packet数で1万packetあたりへ正規化する。
 ## benchmarkを汚さないための処置
 
 - eBPF hot pathでpacketごとの`aya_log`を出さない
-- full countはper-CPU BPF map
+- 実験として観測するpacketのfull countはper-CPU BPF map
 - RingBufは画面用sampleであり、packet総数に使わない
+- SSH `:22` と packet-poipoi内部TCP `:9000-9030` はXDPの観測・count・rate alert対象から除外し、Dashboard stream自身を再観測しない
+- HTTP canary `:8080` と実験用UDP `:4000` は観測対象のまま残す
 - cumulative counterをrun結果として使わない
 - fixtureと実測streamをbadgeで区別する
 - target rateだけでなく実送信数を保存する
