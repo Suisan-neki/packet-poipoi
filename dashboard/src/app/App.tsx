@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { isWebDemo, subscribeStream } from "../stream.js";
+import PacketFlow from "./PacketFlow";
 
 type DropPoint = "application" | "netfilter" | "xdp";
 
@@ -227,29 +228,6 @@ function formatPps(value: number | null) {
   return formatNumber(value);
 }
 
-function DeviceIllustration({ kind }: { kind: "sender" | "receiver" }) {
-  if (kind === "sender") {
-    return (
-      <div className="computer-illustration" aria-hidden="true">
-        <span className="computer-illustration__screen">
-          <i />
-        </span>
-        <span className="computer-illustration__hinge" />
-        <span className="computer-illustration__base" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="device-illustration device-illustration--receiver" aria-hidden="true">
-      <span className="device-illustration__board" />
-      <span className="device-illustration__chip" />
-      <span className="device-illustration__port device-illustration__port--1" />
-      <span className="device-illustration__port device-illustration__port--2" />
-    </div>
-  );
-}
-
 function ResultCard({
   summary,
   selected,
@@ -386,13 +364,6 @@ export default function App() {
       ? `${health.statusCode ?? 200} OK · ${formatNumber(health.latencyMs, 0)} ms`
       : "応答なし";
 
-  const stages = [
-    { id: "nic", title: "NIC", sub: "ネットワークの入口" },
-    { id: "xdp", title: "XDP", sub: attachMode === "generic" ? "generic XDP" : "かなり早い段階" },
-    { id: "stack", title: "Linux", sub: "ネットワーク処理" },
-    { id: "netfilter", title: "Netfilter", sub: "nftablesで設定" },
-    { id: "application", title: "アプリケーション", sub: "Webサービス" },
-  ];
 
   return (
     <main className="exhibit-page">
@@ -412,68 +383,14 @@ export default function App() {
         </aside>
       </section>
 
-      <section className="network-board" aria-label="Pi AからPi Bへの通信と停止位置">
-        <article className="network-device network-device--sender">
-          <div className="network-device__heading">
-            <strong>送る側（Pi A）</strong>
-            <small>あなたのパソコンのイメージ</small>
-          </div>
-          <DeviceIllustration kind="sender" />
-          <div className="sender-live">
-            <span>{statusLabel}</span>
-            <strong>{currentPps > 0 ? `${formatPps(currentPps)} pps` : "— pps"}</strong>
-          </div>
-        </article>
-
-        <div className="network-arrows" aria-hidden="true">
-          <div className="network-arrow network-arrow--load">
-            <span>いらない通信<br /><b>UDP :4000</b></span>
-            <i />
-          </div>
-          <div className="network-arrow network-arrow--service">
-            <span>守りたい通信<br /><b>HTTP GET :8080</b></span>
-            <i />
-          </div>
-        </div>
-
-        <article className="network-device network-device--receiver">
-          <div className="receiver-topline">
-            <div>
-              <strong>受ける側（Pi B）</strong>
-              <small>サーバー・クラウドのイメージ</small>
-            </div>
-            <div className="current-stop">
-              <span>いま見ている場所</span>
-              <strong>{selectedMeta.label}</strong>
-              <small>{selectedMeta.technical}{selected === "xdp" && attachMode !== "unknown" ? ` · ${attachMode}` : ""}</small>
-            </div>
-          </div>
-
-          <div className="receiver-body">
-            <DeviceIllustration kind="receiver" />
-            <div className="pipeline">
-              {stages.map((stage, index) => {
-                const active = stage.id === selectedMeta.stage;
-                return (
-                  <div className="pipeline-step" key={stage.id}>
-                    {index > 0 && <span className="pipeline-link">→</span>}
-                    <div className={`pipeline-node pipeline-node--${stage.id} ${active ? "is-active" : ""}`}>
-                      <strong>{stage.title}</strong>
-                      <small>{stage.sub}</small>
-                      {active && <em>ここで止める</em>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className={`service-check ${health.success ? "is-ok" : healthWaiting ? "is-waiting" : "is-down"}`}>
-              <span>Webサービス</span>
-              <strong>{healthText}</strong>
-              <small>レスポンスは速い？</small>
-            </div>
-          </div>
-        </article>
-      </section>
+      <PacketFlow
+        selected={selected}
+        attachMode={attachMode}
+        healthText={healthText}
+        healthState={healthWaiting ? "waiting" : health.success ? "ok" : "down"}
+        senderStatus={statusLabel}
+        senderPps={currentPps > 0 ? `${formatPps(currentPps)} pps` : "— pps"}
+      />
 
       <section className="tradeoff-board">
         <article className="tradeoff-card tradeoff-card--early">
