@@ -7,8 +7,8 @@
 const STAGES = [
   { id: "nic", title: "NIC", sub: "ネットワークの入口" },
   { id: "xdp", title: "XDP", sub: "最前線の検問所" },
-  { id: "stack", title: "TCP/IP<br>スタック", sub: "データの仕分け" },
-  { id: "netfilter", title: "Netfilter", sub: "ファイアウォール" },
+  { id: "stack", title: "Linux", sub: "OSの標準ネットワーク処理" },
+  { id: "netfilter", title: "Netfilter", sub: "OS内蔵のパケットフィルタ" },
   { id: "application", title: "アプリ<br>ケーション", sub: "最終目的地" },
 ];
 const CONDITIONS = {
