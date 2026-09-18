@@ -116,7 +116,7 @@ export class PacketNetworkDiagram extends HTMLElement {
     this._toggle = () => { this._manualPause = !this.paused; this._refresh(); };
   }
   get selected() { const s = this.getAttribute("data-stop"); return Object.hasOwn(CONDITIONS, s ?? "") ? s : "application"; }
-  get paused() { return this._manualPause ?? this._preference?.matches ?? false; }
+  get paused() { return this._preference?.matches ?? false; }
   connectedCallback() {
     if (!this._ready) this._mount();
     this._preference = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -169,7 +169,7 @@ export class PacketNetworkDiagram extends HTMLElement {
         </article>
         <canvas class="stream-canvas" aria-hidden="true"></canvas>
         <span class="stream-blocked" aria-hidden="true">BLOCKED</span>
-        <div class="stream-tools"><span class="stream-note">模式表示 · 粒の数と速さは実測値ではありません</span><button class="stream-pause" type="button" aria-pressed="false">一時停止</button></div>
+        <div class="stream-tools"><span class="stream-note">模式表示 · 粒の数と速さは実測値ではありません</span></div>
         <span class="packet-stream-description" aria-live="polite"></span>
       </section></div>`;
     this._board = this.querySelector(".network-board");
