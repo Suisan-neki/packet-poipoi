@@ -143,7 +143,7 @@ export class PacketNetworkDiagram extends HTMLElement {
       <div class="packet-stream-viewport" role="region" tabindex="0" aria-label="通信図。狭い画面では横にスクロールできます。">
       <section class="network-board network-board--stream" aria-label="Pi AからPi Bへの通信と停止位置">
         <article class="network-device network-device--sender">
-          <div class="network-device__heading"><strong>送る側（Pi A）</strong><small>パソコンのイメージ</small></div>
+          <div class="network-device__heading"><strong>送る側（Pi A）</strong><small>クライアント（送信元）</small></div>
           <div class="computer-illustration" aria-hidden="true"><span class="computer-illustration__screen"><i></i></span><span class="computer-illustration__hinge"></span><span class="computer-illustration__base"></span></div>
           <div class="sender-live"><span class="sender-status"></span><strong class="sender-pps"></strong></div>
         </article>
@@ -152,7 +152,7 @@ export class PacketNetworkDiagram extends HTMLElement {
           <div class="network-arrow network-arrow--service"><span>守りたい通信<br><b>HTTP GET :8080</b></span><i></i></div>
         </div>
         <article class="network-device network-device--receiver">
-          <div class="receiver-topline"><div><strong>受ける側（Pi B）</strong><small>サーバーのイメージ</small></div>
+          <div class="receiver-topline"><div><strong>受ける側（Pi B）</strong><small>エッジサーバー</small></div>
             <div class="current-stop"><span>いま見ている場所</span><strong class="stop-title"></strong><small class="stop-technical"></small></div>
           </div>
           <div class="receiver-body">
