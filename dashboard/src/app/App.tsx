@@ -63,7 +63,6 @@ export default function App() {
     <main className="exhibit-page exhibit-page--compact">
       <section className="exhibit-intro exhibit-intro--compact">
         <div className="exhibit-intro__copy">
-          <span className="exhibit-kicker">packet-poipoi</span>
           <h1>どこで通信を止める？</h1>
           <p>
             赤い通信を止める位置を切り替えると、どこまで処理されてから捨てられるかが変わります。
@@ -101,11 +100,6 @@ export default function App() {
         senderStatus="模式表示"
         senderPps="—"
       />
-
-      <footer className="exhibit-footer exhibit-footer--compact">
-        <span>MODE DIAGRAM</span>
-        <strong>模式表示 · 実測結果は別紙で説明</strong>
-      </footer>
     </main>
   );
 }
