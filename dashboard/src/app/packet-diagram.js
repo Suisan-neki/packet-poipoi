@@ -232,7 +232,7 @@ export class PacketNetworkDiagram extends HTMLElement {
       { x: blueArrow.right, y: blueArrow.y + blueArrow.h / 2 },
     ];
     for (const n of nodes) bluePoints.push({ x: n.x + 3, y: n.y + 9 }, { x: n.right - 3, y: n.y + 9 });
-    bluePoints.push({ x: service.x - 12, y: nodes.at(-1).y + 9 });
+    bluePoints.push({ x: service.x + 48, y: nodes.at(-1).y + 9 });
     this._blue = pathFrom(bluePoints);
     this._nodeBoxes = nodes.map(n => {
       const x = n.x + n.w / 2;
