@@ -284,6 +284,32 @@ export default function App() {
   const [selected, setSelected] = useState<DropPoint>(demo ? "xdp" : "application");
 
   useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+
+      if (event.key === "1") {
+        setSelected("xdp");
+        return;
+      }
+
+      if (event.key === "2") {
+        setSelected("netfilter");
+        return;
+      }
+
+      if (event.key === "3") {
+        setSelected("application");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
     let disposed = false;
     let unsubscribe: undefined | (() => void);
 
