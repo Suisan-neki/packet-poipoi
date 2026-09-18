@@ -120,6 +120,26 @@
   position: absolute; left: 12px; bottom: 9px; color: #8a5660; font-size: .6rem; line-height: 1.3;
 }
 
+/* Stages after the selected block point are spared from the unwanted UDP.
+   Dim only the processing boxes/static arrows; the blue HTTP stream remains vivid
+   because it still traverses the full service path. */
+.cpu-exhibit .network-board--stream .pipeline-step,
+.cpu-exhibit .network-board--stream .pipeline-node,
+.cpu-exhibit .network-board--stream .pipeline-link {
+  transition: opacity 220ms ease, filter 220ms ease, background-color 220ms ease, border-color 220ms ease;
+}
+.cpu-exhibit[data-mode="xdp"] .network-board--stream .pipeline-step:nth-child(n+3) .pipeline-node,
+.cpu-exhibit[data-mode="netfilter"] .network-board--stream .pipeline-step:nth-child(n+5) .pipeline-node {
+  opacity: .48;
+  filter: grayscale(.55) saturate(.55);
+  background: #f6f8f9;
+  border-color: #dce3e8;
+}
+.cpu-exhibit[data-mode="xdp"] .network-board--stream .pipeline-step:nth-child(n+3) .pipeline-link,
+.cpu-exhibit[data-mode="netfilter"] .network-board--stream .pipeline-step:nth-child(n+5) .pipeline-link {
+  opacity: .28;
+}
+
 @media (min-width: 921px) {
   .exhibit-page.cpu-exhibit {
     width: min(1500px, calc(100% - 32px)); height: 100vh; height: 100dvh; min-height: 0;
