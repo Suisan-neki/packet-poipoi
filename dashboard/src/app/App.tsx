@@ -40,12 +40,8 @@ function CpuComparison({ selected, onSelect }: {
     <section className="cpu-comparison" aria-labelledby="cpu-result-title">
       <div className="cpu-comparison__lead">
         <span className="cpu-comparison__eyebrow">今回の実測</span>
-        <h2 id="cpu-result-title">不要な通信をアプリまで持ち込むと、<br />アプリ側にも処理が発生する。</h2>
-        <p className="cpu-comparison__evidence">今回の実測では、その条件で Pi B 全体のCPU使用率が最も高かった。</p>
-        <div className="cpu-comparison__differences">
-          <span>入口 → OS途中 <b>+{(CPU.netfilter - CPU.xdp).toFixed(1)}ポイント</b></span>
-          <span>OS途中 → Application <b>+{(CPU.application - CPU.netfilter).toFixed(1)}ポイント</b></span>
-        </div>
+        <h2 id="cpu-result-title">不要なトラフィックを<br />上位層へ持ち込むコスト</h2>
+        <p className="cpu-comparison__evidence">Applicationまで届ける条件で、Pi B 全体のCPU使用率が最も高かった。</p>
       </div>
       <figure className="cpu-chart">
         <figcaption>停止位置ごとの Pi B 全体のCPU使用率 <small>3回の中央値</small></figcaption>
@@ -106,7 +102,7 @@ export default function App() {
       <section className="exhibit-intro exhibit-intro--compact">
         <div className="exhibit-intro__copy">
           <h1>どこで通信を止める？</h1>
-          <p>不要な通信の処理を、どの層まで持ち込むか。止める場所と Pi B 全体のCPU使用率を見比べます。</p>
+          <p>不要な通信をどこまで通すか。止める場所と Pi B 全体のCPU使用率を見比べます。</p>
         </div>
       </section>
       <section className="mode-switch" aria-label="通信を止める位置を選ぶ">
