@@ -35,7 +35,6 @@ packet-network-diagram { display:block; min-width:0; }
 .network-board--stream .pipeline-node small,
 .network-board--stream .pipeline-node em { position:relative; z-index:4; }
 .network-board--stream .pipeline-node em { position:absolute; }
-.network-board--stream .stream-blocked { position:absolute; z-index:5; color:#cf2d4b; font-size:13px; font-weight:800; letter-spacing:.025em; transform:translateX(-50%); pointer-events:none; white-space:nowrap; }
 .network-board--stream .stream-tools { position:absolute; bottom:9px; right:18px; z-index:6; display:flex; align-items:center; gap:10px; color:#59718b; }
 .network-board--stream .stream-note { font-size:10px; line-height:1.3; }
 .packet-stream-description { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
@@ -161,7 +160,6 @@ export class PacketNetworkDiagram extends HTMLElement {
           </div>
         </article>
         <canvas class="stream-canvas" aria-hidden="true"></canvas>
-        <span class="stream-blocked" aria-hidden="true">BLOCKED</span>
         <div class="stream-tools"><span class="stream-note">模式表示 · 粒の数と速さは実測値ではありません</span></div>
         <span class="packet-stream-description" aria-live="polite"></span>
       </section></div>`;
@@ -170,7 +168,6 @@ export class PacketNetworkDiagram extends HTMLElement {
     this._ctx = this._canvas.getContext("2d");
     this._nodes = [...this.querySelectorAll(".pipeline-node")];
     this._service = this.querySelector(".service-check");
-    this._blocked = this.querySelector(".stream-blocked");
     this._ready = true;
   }
   _update() {
@@ -239,10 +236,6 @@ export class PacketNetworkDiagram extends HTMLElement {
       const p = this._blue.samples.reduce((best, p) => Math.abs(p.x - x) < Math.abs(best.x - x) ? p : best);
       return { ...n, distance: p.d };
     });
-    const blockedX = this.selected === "application" ? this._gate.x - 62 : this._gate.x;
-    const blockedY = this.selected === "application" ? redY - 28 : redY - 46;
-    this._blocked.style.left = `${blockedX}px`;
-    this._blocked.style.top = `${blockedY}px`;
     this._dirty = false;
     return true;
   }
