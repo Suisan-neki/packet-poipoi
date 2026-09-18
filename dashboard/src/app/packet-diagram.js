@@ -143,7 +143,7 @@ export class PacketNetworkDiagram extends HTMLElement {
       <div class="packet-stream-viewport" role="region" tabindex="0" aria-label="通信図。狭い画面では横にスクロールできます。">
       <section class="network-board network-board--stream" aria-label="Pi AからPi Bへの通信と停止位置">
         <article class="network-device network-device--sender">
-          <div class="network-device__heading"><strong>送る側（Pi A）</strong><small>あなたのパソコンのイメージ</small></div>
+          <div class="network-device__heading"><strong>送る側（Pi A）</strong><small>パソコンのイメージ</small></div>
           <div class="computer-illustration" aria-hidden="true"><span class="computer-illustration__screen"><i></i></span><span class="computer-illustration__hinge"></span><span class="computer-illustration__base"></span></div>
           <div class="sender-live"><span class="sender-status"></span><strong class="sender-pps"></strong></div>
         </article>
