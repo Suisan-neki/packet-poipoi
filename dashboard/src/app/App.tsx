@@ -40,11 +40,11 @@ function CpuComparison({ selected, onSelect }: {
     <section className="cpu-comparison" aria-labelledby="cpu-result-title">
       <div className="cpu-comparison__lead">
         <span className="cpu-comparison__eyebrow">今回の実測</span>
-        <h2 id="cpu-result-title">不要なトラフィックを<br />上位層へ持ち込むコスト</h2>
-        <p className="cpu-comparison__evidence">Applicationまで届ける条件で、Pi B 全体のCPU使用率が最も高かった。</p>
+        <h2 id="cpu-result-title">アプリケーションに<br />不要な仕事をさせるコスト</h2>
+        <p className="cpu-comparison__evidence">同じ通信を破棄する場合でも、奥の層（アプリケーション）まで運んでから処理すると、より多くのCPUリソースを消費した。</p>
       </div>
       <figure className="cpu-chart">
-        <figcaption>停止位置ごとの Pi B 全体のCPU使用率 <small>3回の中央値</small></figcaption>
+        <figcaption>不要通信を処理したときのCPU負荷 <small>Pi B全体・3回の中央値</small></figcaption>
         <div className="cpu-chart__axis" aria-hidden="true">
           <span>0</span><span>4</span><span>8</span><span>12%</span>
         </div>
@@ -102,7 +102,7 @@ export default function App() {
       <section className="exhibit-intro exhibit-intro--compact">
         <div className="exhibit-intro__copy">
           <h1>どこで通信を止める？</h1>
-          <p>不要な通信をどこまで通すか。止める場所と Pi B 全体のCPU使用率を見比べます。</p>
+          <p>不要な通信の処理を、どの層の責務にするか。停止位置によるリソース消費の違いを比較します。</p>
         </div>
       </section>
       <section className="mode-switch" aria-label="通信を止める位置を選ぶ">
