@@ -44,7 +44,7 @@ function CpuComparison({ selected, onSelect }: {
         <p className="cpu-comparison__evidence">同じ通信を破棄する場合でも、奥の層（アプリケーション）まで運んでから処理すると、より多くのCPUリソースを消費した。</p>
       </div>
       <figure className="cpu-chart">
-        <figcaption>不要通信を処理したときのCPU負荷 <small>Pi B全体・3回の中央値</small></figcaption>
+        <figcaption>不要な通信を処理したときのCPU負荷 <small>Pi B全体・3回の中央値</small></figcaption>
         <div className="cpu-chart__axis" aria-hidden="true">
           <span>0</span><span>4</span><span>8</span><span>12%</span>
         </div>
