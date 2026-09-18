@@ -37,6 +37,10 @@ export default function App() {
   const [selected, setSelected] = useState<DropPoint>("application");
 
   useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return;
 
