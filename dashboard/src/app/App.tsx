@@ -40,10 +40,11 @@ function CpuComparison({ selected, onSelect }: {
     <section className="cpu-comparison" aria-labelledby="cpu-result-title">
       <div className="cpu-comparison__lead">
         <span className="cpu-comparison__eyebrow">今回の実測</span>
-        <h2 id="cpu-result-title">アプリまで届ける条件で、<br />CPU使用率が高かった。</h2>
+        <h2 id="cpu-result-title">不要な通信をアプリまで持ち込むと、<br />アプリ側にも処理が発生する。</h2>
+        <p className="cpu-comparison__evidence">今回の実測では、その条件で Pi B 全体のCPU使用率が最も高かった。</p>
         <div className="cpu-comparison__differences">
-          <span>XDPで停止 → nftablesで停止 <b>+{(CPU.netfilter - CPU.xdp).toFixed(1)}ポイント</b></span>
-          <span>nftablesで停止 → Applicationで停止 <b>+{(CPU.application - CPU.netfilter).toFixed(1)}ポイント</b></span>
+          <span>入口 → OS途中 <b>+{(CPU.netfilter - CPU.xdp).toFixed(1)}ポイント</b></span>
+          <span>OS途中 → Application <b>+{(CPU.application - CPU.netfilter).toFixed(1)}ポイント</b></span>
         </div>
       </div>
       <figure className="cpu-chart">
@@ -74,7 +75,7 @@ function CpuComparison({ selected, onSelect }: {
             );
           })}
         </div>
-        <p className="cpu-chart__conditions">毎秒約5万パケット · 10秒 × 3回</p>
+        <p className="cpu-chart__conditions">同じ不要通信を送信 · 毎秒約5万パケット · 10秒 × 3回</p>
       </figure>
     </section>
   );
@@ -105,7 +106,7 @@ export default function App() {
       <section className="exhibit-intro exhibit-intro--compact">
         <div className="exhibit-intro__copy">
           <h1>どこで通信を止める？</h1>
-          <p>赤い不要な通信を「アプリまで届けるか」。止める場所とCPU使用率を見比べます。</p>
+          <p>不要な通信の処理を、どの層まで持ち込むか。止める場所と Pi B 全体のCPU使用率を見比べます。</p>
         </div>
       </section>
       <section className="mode-switch" aria-label="通信を止める位置を選ぶ">
