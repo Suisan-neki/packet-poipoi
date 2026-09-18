@@ -5,9 +5,9 @@
 - Test fixtures: success
 - Browser E2E: success
 - Checks: public page, image-to-PDF download, DRM-free EPUB preview
-- Commit: a1d06d374dde6abf14ac2b19198cca2785d12cd4
+- Commit: f4fc23e06b2e8d076e1c774e1ec864c4e142018b
 - URL: https://suisan-neki.github.io/packet-poipoi/tools/shelfpdf/
-- Workflow: https://github.com/Suisan-neki/packet-poipoi/actions/runs/35366215184
+- Workflow: https://github.com/Suisan-neki/packet-poipoi/actions/runs/35367569677
 
 ```text
 --- runtime.log ---
