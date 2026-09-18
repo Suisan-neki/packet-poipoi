@@ -475,7 +475,6 @@ export default function App() {
 
       <footer className="exhibit-footer">
         <span>{demo ? "SAMPLE DATA" : `LIVE · ${streamStatus.toUpperCase()}`}</span>
-        <strong>やってみる。わかってくる。ちょうどよくする。</strong>
       </footer>
     </main>
   );
