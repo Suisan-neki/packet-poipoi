@@ -124,7 +124,7 @@ export default function App() {
       <PacketFlow
         selected={selected}
         attachMode="generic"
-        healthText="HTTP 到達"
+        healthText="正常レスポンス"
         healthState="ok"
         senderStatus="模式表示"
         senderPps="—"

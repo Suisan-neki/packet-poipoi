@@ -90,7 +90,32 @@
   min-height: 22px; padding: 3px 7px; background: var(--selection); font-size: .58rem;
   white-space: nowrap; box-shadow: none;
 }
-.cpu-exhibit .network-board--stream .service-check.is-ok { background: #f1f7ff; border-color: #b8d4ee; }
+.cpu-exhibit .network-board--stream .service-check {
+  width: auto;
+  flex: 0 0 auto;
+  align-self: center;
+  gap: 2px;
+  padding: 0 4px 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.cpu-exhibit .network-board--stream .service-check > span {
+  color: #607789;
+  font-size: .58rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.cpu-exhibit .network-board--stream .service-check > strong {
+  color: #2169ae;
+  font-size: .72rem;
+  white-space: nowrap;
+}
+.cpu-exhibit .network-board--stream .service-check.is-ok {
+  border: 0;
+  background: transparent;
+}
 .cpu-exhibit .network-board--stream .service-check.is-ok > strong { color: #2169ae; }
 .cpu-exhibit .network-board--stream .stream-blocked { font-size: 12px; }
 .cpu-exhibit .network-board--stream .stream-note { font-size: 9px; }

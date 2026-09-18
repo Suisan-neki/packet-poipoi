@@ -7,7 +7,7 @@
 const STAGES = [
   { id: "nic", title: "NIC", sub: "ネットワークの入口" },
   { id: "xdp", title: "XDP", sub: "実行モード未取得" },
-  { id: "stack", title: "Linux", sub: "ネットワーク処理" },
+  { id: "stack", title: "TCP/IPスタック", sub: "通常のカーネル内処理" },
   { id: "netfilter", title: "Netfilter", sub: "nftablesで設定" },
   { id: "application", title: "アプリケーション", sub: "Webサービス" },
 ];
@@ -157,7 +157,7 @@ export class PacketNetworkDiagram extends HTMLElement {
           </div>
           <div class="receiver-body">
             <div class="pipeline">${STAGES.map((s, i) => `<div class="pipeline-step">${i ? '<span class="pipeline-link">→</span>' : ''}<div class="pipeline-node pipeline-node--${s.id}" data-stage="${s.id}"><strong>${s.title}</strong><small>${s.sub}</small><em style="display:none">ここで捨てる</em></div></div>`).join("")}</div>
-            <div class="service-check"><span>Webサービス</span><strong class="health-reading"></strong><small>レスポンスは速い？</small></div>
+            <div class="service-check"><span>HTTP処理完了</span><strong class="health-reading"></strong></div>
           </div>
         </article>
         <canvas class="stream-canvas" aria-hidden="true"></canvas>
@@ -235,7 +235,7 @@ export class PacketNetworkDiagram extends HTMLElement {
     for (const n of nodes) bluePoints.push({ x: n.x + 3, y: n.y + 9 }, { x: n.right - 3, y: n.y + 9 });
     bluePoints.push({ x: service.x + 3, y: service.y + 9 }, { x: service.right - 11, y: service.y + 9 });
     this._blue = pathFrom(bluePoints);
-    this._nodeBoxes = [...nodes, service].map(n => {
+    this._nodeBoxes = nodes.map(n => {
       const x = n.x + n.w / 2;
       const p = this._blue.samples.reduce((best, p) => Math.abs(p.x - x) < Math.abs(best.x - x) ? p : best);
       return { ...n, distance: p.d };
