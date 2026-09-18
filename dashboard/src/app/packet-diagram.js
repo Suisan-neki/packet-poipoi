@@ -240,8 +240,10 @@ export class PacketNetworkDiagram extends HTMLElement {
       const p = this._blue.samples.reduce((best, p) => Math.abs(p.x - x) < Math.abs(best.x - x) ? p : best);
       return { ...n, distance: p.d };
     });
-    this._blocked.style.left = `${this._gate.x}px`;
-    this._blocked.style.top = `${redY - 46}px`;
+    const blockedX = this.selected === "application" ? this._gate.x - 62 : this._gate.x;
+    const blockedY = this.selected === "application" ? redY - 28 : redY - 46;
+    this._blocked.style.left = `${blockedX}px`;
+    this._blocked.style.top = `${blockedY}px`;
     this._dirty = false;
     return true;
   }
