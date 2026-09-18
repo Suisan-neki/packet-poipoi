@@ -38,9 +38,6 @@ packet-network-diagram { display:block; min-width:0; }
 .network-board--stream .stream-blocked { position:absolute; z-index:5; color:#cf2d4b; font-size:13px; font-weight:800; letter-spacing:.025em; transform:translateX(-50%); pointer-events:none; white-space:nowrap; }
 .network-board--stream .stream-tools { position:absolute; bottom:9px; right:18px; z-index:6; display:flex; align-items:center; gap:10px; color:#59718b; }
 .network-board--stream .stream-note { font-size:10px; line-height:1.3; }
-.network-board--stream .stream-pause { border:1px solid #c6daef; border-radius:6px; background:rgba(255,255,255,.94); color:#52677f; font:inherit; font-size:11px; line-height:1.3; padding:5px 8px; min-height:28px; cursor:pointer; }
-.network-board--stream .stream-pause:hover { background:#eaf3ff; }
-.network-board--stream .stream-pause:focus-visible { outline:3px solid #1769e0; outline-offset:2px; }
 .packet-stream-description { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 @media(max-width:1100px) {
   .network-board--stream .receiver-body { padding-top:42px; padding-bottom:42px; }
@@ -104,7 +101,6 @@ export class PacketNetworkDiagram extends HTMLElement {
     this._raf = 0;
     this._last = null;
     this._ready = false;
-    this._manualPause = null;
     this._dirty = true;
     this._particles = Array.from({ length: 600 }, (_, i) => ({
       phase: seed(i), jitter: seed(i + 700), size: .55 + seed(i + 1300) * 1.1,
@@ -113,7 +109,6 @@ export class PacketNetworkDiagram extends HTMLElement {
     this._visibility = this._visibility.bind(this);
     this._resize = () => { this._dirty = true; this._refresh(); };
     this._motion = () => { this._manualPause = null; this._refresh(); };
-    this._toggle = () => { this._manualPause = !this.paused; this._refresh(); };
   }
   get selected() { const s = this.getAttribute("data-stop"); return Object.hasOwn(CONDITIONS, s ?? "") ? s : "application"; }
   get paused() { return this._preference?.matches ?? false; }
@@ -123,7 +118,6 @@ export class PacketNetworkDiagram extends HTMLElement {
     this._preference.addEventListener("change", this._motion);
     document.addEventListener("visibilitychange", this._visibility);
     window.addEventListener("resize", this._resize);
-    this._pause.addEventListener("click", this._toggle);
     this._observer = new ResizeObserver(this._resize);
     this._observer.observe(this._board);
     [...this._nodes, this._service].forEach(n => this._observer.observe(n));
@@ -139,7 +133,6 @@ export class PacketNetworkDiagram extends HTMLElement {
     this._preference?.removeEventListener("change", this._motion);
     document.removeEventListener("visibilitychange", this._visibility);
     window.removeEventListener("resize", this._resize);
-    this._pause?.removeEventListener("click", this._toggle);
   }
   attributeChangedCallback(name, previous, next) {
     if (this._ready && previous !== next) this._update();
@@ -177,7 +170,6 @@ export class PacketNetworkDiagram extends HTMLElement {
     this._ctx = this._canvas.getContext("2d");
     this._nodes = [...this.querySelectorAll(".pipeline-node")];
     this._service = this.querySelector(".service-check");
-    this._pause = this.querySelector(".stream-pause");
     this._blocked = this.querySelector(".stream-blocked");
     this._ready = true;
   }
@@ -255,8 +247,6 @@ export class PacketNetworkDiagram extends HTMLElement {
   }
   _refresh() {
     if (!this.isConnected) return;
-    this._pause.textContent = this.paused ? "再生" : "一時停止";
-    this._pause.setAttribute("aria-pressed", String(this.paused));
     if (this.paused || document.hidden) {
       cancelAnimationFrame(this._raf); this._raf = 0; this._last = null;
       if (this._dirty) this._measure();
