@@ -152,7 +152,7 @@ export class PacketNetworkDiagram extends HTMLElement {
           <div class="network-arrow network-arrow--service"><span>守りたい通信<br><b>HTTP GET :8080</b></span><i></i></div>
         </div>
         <article class="network-device network-device--receiver">
-          <div class="receiver-topline"><div><strong>受ける側（Pi B）</strong><small>サーバー・クラウドのイメージ</small></div>
+          <div class="receiver-topline"><div><strong>受ける側（Pi B）</strong><small>サーバーのイメージ</small></div>
             <div class="current-stop"><span>いま見ている場所</span><strong class="stop-title"></strong><small class="stop-technical"></small></div>
           </div>
           <div class="receiver-body">
