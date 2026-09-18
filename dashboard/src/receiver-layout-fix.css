@@ -76,7 +76,7 @@
     height: 100vh;
     min-height: 0;
     padding: 16px 0 10px;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     gap: 10px;
   }
 
@@ -191,6 +191,55 @@
     text-align: right;
   }
 
+  .measured-result {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    min-height: 46px;
+    padding: 8px 14px;
+    border: 1px solid #dbe6f0;
+    border-radius: 12px;
+    background: #f8fbfe;
+  }
+
+  .measured-result p {
+    margin: 0;
+    color: #405a73;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+
+  .measured-result__values {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 20px;
+    min-width: 0;
+  }
+
+  .measured-result__values span {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    white-space: nowrap;
+  }
+
+  .measured-result__values b {
+    color: #61768b;
+    font-size: 0.68rem;
+    font-weight: 700;
+  }
+
+  .measured-result__values strong {
+    color: var(--ink-strong);
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 1.05rem;
+    font-weight: 800;
+  }
+
   .exhibit-page--compact packet-network-diagram,
   .exhibit-page--compact .packet-stream-viewport,
   .exhibit-page--compact .network-board--stream {
@@ -243,6 +292,18 @@
 @media (max-width: 1180px) and (min-width: 921px) {
   .mode-switch__description {
     display: none;
+  }
+
+  .measured-result {
+    gap: 12px;
+  }
+
+  .measured-result p {
+    white-space: normal;
+  }
+
+  .measured-result__values {
+    gap: 12px;
   }
 
   .mode-switch__button {
