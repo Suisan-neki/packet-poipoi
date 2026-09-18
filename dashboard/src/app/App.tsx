@@ -27,9 +27,9 @@ const CONDITIONS: Array<{
   technical: string;
   description: string;
 }> = [
-  { dropPoint: "xdp", number: "1", label: "入口で止める", technical: "XDP", description: "後段へ運ばない" },
-  { dropPoint: "netfilter", number: "2", label: "途中で止める", technical: "nftables", description: "アプリには届けない" },
-  { dropPoint: "application", number: "3", label: "届いてから止める", technical: "Application", description: "アプリまで運んで捨てる" },
+  { dropPoint: "xdp", number: "1", label: "入口で捨てる", technical: "XDP", description: "後段へ運ばない" },
+  { dropPoint: "netfilter", number: "2", label: "途中で捨てる", technical: "nftables", description: "アプリには届けない" },
+  { dropPoint: "application", number: "3", label: "届いてから捨てる", technical: "Application", description: "アプリまで運んで捨てる" },
 ];
 
 function CpuComparison({ selected, onSelect }: {
@@ -58,11 +58,11 @@ function CpuComparison({ selected, onSelect }: {
                 type="button"
                 className={`cpu-chart__row ${current ? "is-current" : ""}`}
                 aria-pressed={current}
-                aria-label={`${mode === "application" ? "アプリ層" : condition.technical}${mode === "xdp" ? "（generic）" : ""}で止める条件。Pi B全体のCPU使用率の中央値 ${CPU[mode].toFixed(1)}%。この停止位置を表示`}
+                aria-label={`${mode === "application" ? "アプリ層" : condition.technical}${mode === "xdp" ? "（generic）" : ""}で捨てる条件。Pi B全体のCPU使用率の中央値 ${CPU[mode].toFixed(1)}%。この破棄位置を表示`}
                 title={`各回のCPU使用率：${CPU_SAMPLES[mode].map(value => `${value.toFixed(1)}%`).join(" / ")}`}
                 onClick={() => onSelect(mode)}
               >
-                <span className="cpu-chart__label">{mode === "application" ? "アプリ層" : condition.technical}{mode === "xdp" && <small>（generic）</small>}で止める</span>
+                <span className="cpu-chart__label">{mode === "application" ? "アプリ層" : condition.technical}{mode === "xdp" && <small>（generic）</small>}で捨てる</span>
                 <span className="cpu-chart__track" aria-hidden="true">
                   <span className="cpu-chart__fill" style={{ width: `${CPU[mode] / CPU_AXIS_MAX * 100}%` }} />
                 </span>
@@ -105,7 +105,7 @@ export default function App() {
           <p>公開されたサーバーには、日々大量の「不要な通信（ノイズや攻撃）」が飛んできます。<br />そのゴミ掃除、アプリケーションにさせてませんか？</p>
         </div>
       </section>
-      <section className="mode-switch" aria-label="通信を止める位置を選ぶ">
+      <section className="mode-switch" aria-label="通信を捨てる位置を選ぶ">
         {CONDITIONS.map(condition => (
           <button
             key={condition.dropPoint}

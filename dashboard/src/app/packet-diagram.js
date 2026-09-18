@@ -12,9 +12,9 @@ const STAGES = [
   { id: "application", title: "アプリケーション", sub: "Webサービス" },
 ];
 const CONDITIONS = {
-  xdp: ["入口で止める", "XDP"],
-  netfilter: ["途中で止める", "Netfilter"],
-  application: ["届いてから止める", "Application"],
+  xdp: ["入口で捨てる", "XDP"],
+  netfilter: ["途中で捨てる", "Netfilter"],
+  application: ["届いてから捨てる", "Application"],
 };
 const COLORS = { load: "233,64,99", http: "51,139,239" };
 const TAU = Math.PI * 2;
@@ -141,7 +141,7 @@ export class PacketNetworkDiagram extends HTMLElement {
     // Only static strings are templated. All external readings use textContent.
     this.innerHTML = `<style>${css}</style>
       <div class="packet-stream-viewport" role="region" tabindex="0" aria-label="通信図。狭い画面では横にスクロールできます。">
-      <section class="network-board network-board--stream" aria-label="Pi AからPi Bへの通信と停止位置">
+      <section class="network-board network-board--stream" aria-label="Pi AからPi Bへの通信と破棄位置">
         <article class="network-device network-device--sender">
           <div class="network-device__heading"><strong>送る側（Pi A）</strong><small>クライアント（送信元）</small></div>
           <div class="computer-illustration" aria-hidden="true"><span class="computer-illustration__screen"><i></i></span><span class="computer-illustration__hinge"></span><span class="computer-illustration__base"></span></div>
@@ -156,7 +156,7 @@ export class PacketNetworkDiagram extends HTMLElement {
             <div class="current-stop"><span>いま見ている場所</span><strong class="stop-title"></strong><small class="stop-technical"></small></div>
           </div>
           <div class="receiver-body">
-            <div class="pipeline">${STAGES.map((s, i) => `<div class="pipeline-step">${i ? '<span class="pipeline-link">→</span>' : ''}<div class="pipeline-node pipeline-node--${s.id}" data-stage="${s.id}"><strong>${s.title}</strong><small>${s.sub}</small><em style="display:none">ここで止める</em></div></div>`).join("")}</div>
+            <div class="pipeline">${STAGES.map((s, i) => `<div class="pipeline-step">${i ? '<span class="pipeline-link">→</span>' : ''}<div class="pipeline-node pipeline-node--${s.id}" data-stage="${s.id}"><strong>${s.title}</strong><small>${s.sub}</small><em style="display:none">ここで捨てる</em></div></div>`).join("")}</div>
             <div class="service-check"><span>Webサービス</span><strong class="health-reading"></strong><small>レスポンスは速い？</small></div>
           </div>
         </article>
