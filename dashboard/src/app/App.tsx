@@ -61,7 +61,7 @@ function CpuComparison({ selected, onSelect }: {
                 type="button"
                 className={`cpu-chart__row ${current ? "is-current" : ""}`}
                 aria-pressed={current}
-                aria-label={`${condition.technical}${mode === "xdp" ? "（generic）" : ""}、CPU使用率の中央値 ${CPU[mode].toFixed(1)}%。この停止位置を表示`}
+                aria-label={`${condition.technical}${mode === "xdp" ? "（generic）" : ""}で止める条件。Pi B全体のCPU使用率の中央値 ${CPU[mode].toFixed(1)}%。この停止位置を表示`}
                 title={`各回のCPU使用率：${CPU_SAMPLES[mode].map(value => `${value.toFixed(1)}%`).join(" / ")}`}
                 onClick={() => onSelect(mode)}
               >
