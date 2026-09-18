@@ -63,3 +63,202 @@
     margin-top: 42px;
   }
 }
+
+/* Compact exhibit layout: explanation, selector and packet path fit in one
+   desktop viewport. Detailed measurements are intentionally left to print. */
+@media (min-width: 921px) {
+  body {
+    overflow: hidden;
+  }
+
+  .exhibit-page--compact {
+    width: min(1500px, calc(100% - 32px));
+    height: 100vh;
+    min-height: 0;
+    padding: 16px 0 10px;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .exhibit-intro--compact {
+    display: block;
+  }
+
+  .exhibit-intro--compact .exhibit-intro__copy {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 22px;
+    row-gap: 2px;
+    align-items: end;
+  }
+
+  .exhibit-intro--compact .exhibit-kicker {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 0.78rem;
+  }
+
+  .exhibit-intro--compact h1 {
+    margin: 0;
+    font-size: clamp(2.35rem, 3.6vw, 3.75rem);
+    line-height: 0.98;
+    white-space: nowrap;
+  }
+
+  .exhibit-intro--compact p {
+    align-self: center;
+    margin: 0 0 2px;
+    max-width: 780px;
+    font-size: clamp(0.86rem, 1.05vw, 1rem);
+    line-height: 1.48;
+  }
+
+  .mode-switch {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .mode-switch__button {
+    display: grid;
+    grid-template-columns: 34px auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-height: 68px;
+    padding: 10px 14px;
+    border: 1px solid #d7e2ec;
+    border-radius: 14px;
+    background: #fff;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease,
+      background 160ms ease;
+  }
+
+  .mode-switch__button:hover {
+    border-color: #8db9e5;
+    background: #fbfdff;
+    transform: translateY(-1px);
+  }
+
+  .mode-switch__button.is-current {
+    border-color: #2b81dd;
+    box-shadow: 0 0 0 4px rgba(43, 129, 221, 0.1);
+    background: #f8fbff;
+  }
+
+  .mode-switch__button > b {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 0.82rem;
+  }
+
+  .mode-switch__button--xdp > b { background: #1b75e5; }
+  .mode-switch__button--netfilter > b { background: #22a575; }
+  .mode-switch__button--application > b { background: #e5a21c; }
+
+  .mode-switch__copy {
+    display: grid;
+    gap: 1px;
+    min-width: 130px;
+  }
+
+  .mode-switch__copy strong {
+    color: var(--ink-strong);
+    font-size: 0.9rem;
+  }
+
+  .mode-switch__copy small {
+    color: #61768b;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 0.6rem;
+    font-weight: 700;
+  }
+
+  .mode-switch__description {
+    justify-self: end;
+    color: #52677f;
+    font-size: 0.72rem;
+    font-weight: 650;
+    line-height: 1.35;
+    text-align: right;
+  }
+
+  .exhibit-page--compact packet-network-diagram,
+  .exhibit-page--compact .packet-stream-viewport,
+  .exhibit-page--compact .network-board--stream {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .exhibit-page--compact .network-board--stream {
+    grid-template-columns: 205px 195px minmax(0, 1fr);
+  }
+
+  .exhibit-page--compact .network-device--sender {
+    grid-template-rows: auto 1fr;
+    padding-top: 16px;
+    padding-bottom: 14px;
+  }
+
+  .exhibit-page--compact .sender-live {
+    display: none;
+  }
+
+  .exhibit-page--compact .receiver-body {
+    margin-top: 30px;
+    padding-top: 34px !important;
+    padding-bottom: 34px !important;
+  }
+
+  .exhibit-page--compact .service-check > small {
+    display: none;
+  }
+
+  .exhibit-page--compact .service-check::after {
+    content: "守りたい通信は通す";
+    color: #687b8d;
+    font-size: 0.56rem;
+    font-weight: 650;
+    line-height: 1.3;
+  }
+
+  .exhibit-page--compact .exhibit-footer {
+    min-height: 18px;
+    padding-top: 0;
+  }
+
+  .exhibit-footer--compact strong {
+    font-size: 0.62rem;
+  }
+}
+
+@media (max-width: 1180px) and (min-width: 921px) {
+  .mode-switch__description {
+    display: none;
+  }
+
+  .mode-switch__button {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .exhibit-intro--compact .exhibit-intro__copy {
+    grid-template-columns: 1fr;
+  }
+
+  .exhibit-intro--compact h1 {
+    white-space: normal;
+  }
+
+  .exhibit-intro--compact p {
+    margin-top: 4px;
+    max-width: none;
+  }
+}
