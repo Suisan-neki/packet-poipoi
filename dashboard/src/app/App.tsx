@@ -96,6 +96,15 @@ export default function App() {
         ))}
       </section>
 
+      <section className="measured-result" aria-label="実測結果">
+        <p>50,000 ppsを処理したときのCPU負荷には差がありました。</p>
+        <div className="measured-result__values">
+          <span><b>XDP（generic）</b><strong>5.3%</strong></span>
+          <span><b>nftables</b><strong>6.7%</strong></span>
+          <span><b>Application</b><strong>9.8%</strong></span>
+        </div>
+      </section>
+
       <PacketFlow
         selected={selected}
         attachMode="generic"
