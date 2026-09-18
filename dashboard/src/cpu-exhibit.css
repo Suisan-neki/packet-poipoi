@@ -38,6 +38,7 @@
 .cpu-comparison__lead { display: flex; flex-direction: column; justify-content: center; gap: 6px; }
 .cpu-comparison__eyebrow { color: #667682; font-size: .67rem; font-weight: 700; }
 .cpu-comparison h2 { margin: 0; color: var(--ink-strong); font-size: clamp(1rem, 1.6vw, 1.28rem); line-height: 1.4; }
+.cpu-comparison__evidence { margin: 0; max-width: 34rem; color: #61717d; font-size: .69rem; line-height: 1.45; }
 .cpu-comparison__differences { display: grid; gap: 3px; font-size: .7rem; line-height: 1.4; color: #657582; }
 .cpu-comparison__differences span { display: flex; align-items: baseline; gap: 10px; }
 .cpu-comparison__differences b { color: var(--ink-strong); font-variant-numeric: tabular-nums; }
@@ -114,10 +115,41 @@
   color: #697b88; font-size: .59rem; white-space: nowrap;
 }
 .cpu-exhibit[data-mode="application"] .pipeline-step:last-child::before { border-left-color: var(--cpu-red); border-left-width: 2px; }
-.cpu-exhibit[data-mode="application"] .pipeline-step:last-child::after { color: var(--cpu-red); font-weight: 700; }
+.cpu-exhibit[data-mode="application"] .pipeline-step:last-child::after { content: "不要UDPもアプリへ"; color: var(--cpu-red); font-weight: 700; }
 .cpu-exhibit .network-board--stream .receiver-body::after {
   content: "赤い背景＝不要な通信が通る処理（層ごとのCPU負荷ではありません）" !important;
   position: absolute; left: 12px; bottom: 9px; color: #8a5660; font-size: .6rem; line-height: 1.3;
+}
+
+/* The Application box makes responsibility visible: either unwanted UDP is kept
+   out of the app, or the app receives it and must participate in disposal. */
+.cpu-exhibit .network-board--stream .pipeline-node--application::after {
+  content: "不要UDPは届かない";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 5;
+  padding: 2px 5px;
+  border: 1px solid #d4dde3;
+  border-radius: 999px;
+  background: rgba(247, 249, 250, .94);
+  color: #74828c;
+  font-size: .5rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.cpu-exhibit[data-mode="application"] .network-board--stream .pipeline-node--application {
+  background:
+    radial-gradient(circle, rgba(198, 76, 96, .22) 0 1px, transparent 1.4px) 0 0 / 10px 10px,
+    #fff1f3;
+  box-shadow: inset 0 0 18px rgba(198, 76, 96, .10), 0 0 0 4px #33434f12;
+}
+.cpu-exhibit[data-mode="application"] .network-board--stream .pipeline-node--application::after {
+  content: "不要UDPも到達";
+  border-color: #e7a9b4;
+  background: rgba(255, 241, 243, .96);
+  color: #a7374b;
 }
 
 /* Stages after the selected block point are spared from the unwanted UDP.
