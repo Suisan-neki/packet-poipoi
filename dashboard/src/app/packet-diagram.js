@@ -108,7 +108,7 @@ export class PacketNetworkDiagram extends HTMLElement {
     this._frame = this._frame.bind(this);
     this._visibility = this._visibility.bind(this);
     this._resize = () => { this._dirty = true; this._refresh(); };
-    this._motion = () => { this._manualPause = null; this._refresh(); };
+    this._motion = () => { this._refresh(); };
   }
   get selected() { const s = this.getAttribute("data-stop"); return Object.hasOwn(CONDITIONS, s ?? "") ? s : "application"; }
   get paused() { return this._preference?.matches ?? false; }
