@@ -116,7 +116,7 @@
 .cpu-exhibit[data-mode="application"] .pipeline-step:last-child::before { border-left-color: var(--cpu-red); border-left-width: 2px; }
 .cpu-exhibit[data-mode="application"] .pipeline-step:last-child::after { color: var(--cpu-red); font-weight: 700; }
 .cpu-exhibit .network-board--stream .receiver-body::after {
-  content: "赤い背景＝不要な通信が通る処理" !important;
+  content: "赤い背景＝不要な通信が通る処理（層ごとのCPU負荷ではありません）" !important;
   position: absolute; left: 12px; bottom: 9px; color: #8a5660; font-size: .6rem; line-height: 1.3;
 }
 
