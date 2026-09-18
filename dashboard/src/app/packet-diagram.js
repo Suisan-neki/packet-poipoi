@@ -1,350 +1,357 @@
 /**
- * Packet path illustration. It does not send traffic or infer packet loss from
- * HTTP success rates. The two tracks distinguish traffic types in ONE receive
- * path; they are not separate physical networks. See docs/UI_DIAGRAM_RESEARCH.md.
+ * Illustrative particle streams, not a packet capture or a traffic generator.
+ * Measurement attributes are displayed verbatim; animation never creates metrics.
+ * The exhibit layout follows the user's 2026-09-18 screenshot. App.tsx, the
+ * experiment aggregation and the React/custom-element interface stay unchanged.
  */
-const SVG_NS = "http://www.w3.org/2000/svg";
 const STAGES = [
-  { id: "nic", x: 327, title: "NIC", sub: "受信の入口" },
-  { id: "xdp", x: 502, title: "XDP", sub: "実行モード未取得" },
-  { id: "stack", x: 677, title: "Linux", sub: "受信処理" },
-  { id: "netfilter", x: 852, title: "Netfilter", sub: "input hook" },
-  { id: "application", x: 1027, title: "アプリ", sub: "ソケット以降" },
+  { id: "nic", title: "NIC", sub: "ネットワークの入口" },
+  { id: "xdp", title: "XDP", sub: "実行モード未取得" },
+  { id: "stack", title: "Linux", sub: "ネットワーク処理" },
+  { id: "netfilter", title: "Netfilter", sub: "nftablesで設定" },
+  { id: "application", title: "アプリケーション", sub: "Webサービス" },
 ];
-const LABELS = {
-  xdp: "入口で止める / XDP",
-  netfilter: "途中で止める / Netfilter",
-  application: "届いてから止める / Application",
+const CONDITIONS = {
+  xdp: ["入口で止める", "XDP"],
+  netfilter: ["途中で止める", "Netfilter"],
+  application: ["届いてから止める", "Application"],
 };
-const STOP_X = { xdp: 602, netfilter: 952, application: 1127 };
-const START_X = 192;
-const HTTP_END_X = 1307;
-const RED_Y = 202;
-const BLUE_Y = 266;
-const SPEED = 132; // Illustration units/second, deliberately not measured pps.
-const styles = `
-  :host { display: block; min-width: 0; color: #17335f; }
-  * { box-sizing: border-box; }
-  .figure { margin: 0; overflow: hidden; border: 1px solid #cbd5e1; border-radius: 16px; background: #fff; }
-  .viewport { overflow-x: auto; scrollbar-width: thin; }
-  svg { display: block; width: 100%; min-width: 800px; height: auto; font-family: inherit; }
-  text { fill: #17335f; }
-  .heading { font-size: 21px; font-weight: 700; }
-  .subtle { fill: #52647a; font-size: 16px; }
-  .node-title { font-size: 21px; font-weight: 700; }
-  .node-sub { font-size: 17px; fill: #52647a; }
-  .node-body { fill: #fff; stroke: #8292a8; stroke-width: 1.25; }
-  .node-header { fill: #f4f7fb; }
-  .stage.is-selected .node-body { stroke: #17335f; stroke-width: 2; }
-  .stage.is-selected .node-header { fill: #eaf1fa; }
-  .node-separator { stroke: #d4dce6; stroke-width: 1; }
-  .track-base { fill: none; stroke: #c6cfdb; stroke-width: 1.5; }
-  .load-path { fill: none; stroke: #b42343; stroke-width: 2; }
-  .service-path { fill: none; stroke: #0962bc; stroke-width: 2; }
-  .red-label { fill: #a51e3c; font-size: 16px; font-weight: 700; }
-  .blue-label { fill: #0757a8; font-size: 16px; font-weight: 700; }
-  .gate-label { fill: #a51e3c; font-size: 17px; font-weight: 700; }
-  .pass-label { fill: #0757a8; font-size: 17px; font-weight: 700; }
-  .packet { pointer-events: none; }
-  .load-packet rect { fill: #b42343; stroke: #fff; stroke-width: 1; }
-  .load-packet path { stroke: #fff; stroke-width: 1.3; fill: none; }
-  .http-packet circle { fill: #0962bc; stroke: #fff; stroke-width: 1.5; }
-  .http-packet path { stroke: #fff; stroke-width: 1.5; fill: none; }
-  .caption { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 18px; border-top: 1px solid #dce3ec; background: #fafbfd; }
-  .caption-text { display: grid; gap: 4px; font-size: 14px; line-height: 1.5; color: #52647a; }
-  .caption-text strong { color: #17335f; font-size: 17px; font-weight: 700; }
-  button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; padding: 8px 12px; border: 1px solid #7d8da1; border-radius: 6px; background: #fff; color: #17335f; font-size: 14px; font-weight: 600; line-height: 1.4; font-family: inherit; cursor: pointer; white-space: nowrap; }
-  button:hover { background: #edf2f8; }
-  button:focus-visible { outline: 3px solid #17335f; outline-offset: 3px; }
-  button svg { width: 16px; min-width: 16px; height: 16px; }
-  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  @media (max-width: 680px) { .caption { align-items: flex-start; flex-wrap: wrap; } }
+const COLORS = { load: "233,64,99", http: "51,139,239" };
+const TAU = Math.PI * 2;
+const SPEED = 110; // CSS pixels per second; independent of measured pps.
+const PERIOD = 310;
+const css = `
+packet-network-diagram { display:block; min-width:0; }
+.packet-stream-viewport { overflow-x:auto; scrollbar-width:thin; border-radius:19px; }
+.network-board--stream { position:relative; isolation:isolate; }
+.network-board--stream .receiver-body { position:relative; padding-top:48px; padding-bottom:48px; }
+.network-board--stream .receiver-body::before,
+.network-board--stream .receiver-body::after,
+.network-board--stream .pipeline-node::before { content:none !important; animation:none !important; }
+.network-board--stream .pipeline-link { color:#9ab0c4; opacity:.65; }
+.network-board--stream .network-arrow i { visibility:hidden; }
+.network-board--stream .stream-canvas { position:absolute; inset:0; width:100%; height:100%; z-index:3; pointer-events:none; }
+.network-board--stream .pipeline-node strong,
+.network-board--stream .pipeline-node small,
+.network-board--stream .pipeline-node em { position:relative; z-index:4; }
+.network-board--stream .pipeline-node em { position:absolute; }
+.network-board--stream .stream-blocked { position:absolute; z-index:5; color:#cf2d4b; font-size:13px; font-weight:800; letter-spacing:.025em; transform:translateX(-50%); pointer-events:none; white-space:nowrap; }
+.network-board--stream .stream-tools { position:absolute; bottom:9px; right:18px; z-index:6; display:flex; align-items:center; gap:10px; color:#59718b; }
+.network-board--stream .stream-note { font-size:10px; line-height:1.3; }
+.network-board--stream .stream-pause { border:1px solid #c6daef; border-radius:6px; background:rgba(255,255,255,.94); color:#52677f; font:inherit; font-size:11px; line-height:1.3; padding:5px 8px; min-height:28px; cursor:pointer; }
+.network-board--stream .stream-pause:hover { background:#eaf3ff; }
+.network-board--stream .stream-pause:focus-visible { outline:3px solid #1769e0; outline-offset:2px; }
+.packet-stream-description { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+@media(max-width:1100px) {
+  .network-board--stream .receiver-body { padding-top:42px; padding-bottom:42px; }
+}
+@media(max-width:920px) {
+  /* Scroll the diagram as one unit instead of separating streams from nodes. */
+  .network-board--stream { min-width:960px; grid-template-columns:180px 160px minmax(0,1fr); }
+  .network-board--stream .network-device--sender { grid-template-columns:initial; grid-template-rows:auto 1fr auto; border-right:1px solid #dbe8f1; border-bottom:0; align-items:normal; }
+  .network-board--stream .computer-illustration { display:block; width:118px; height:84px; transform:none; }
+  .network-board--stream .network-arrows { grid-template-columns:initial; gap:38px; padding:28px 14px; }
+  .network-board--stream .receiver-topline { display:flex; }
+  .network-board--stream .current-stop { min-width:180px; }
+  .network-board--stream .receiver-body { overflow:visible; }
+  .network-board--stream .pipeline { min-width:0; }
+  .network-board--stream .service-check { display:grid; }
+}
 `;
 
-/** A dependency-free renderer so the actual animation can be browser-tested. */
+// Fixed seeds make screenshots repeatable and avoid allocating particle objects
+// or randomising the entire stream on every frame.
+function seed(n) { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); }
+function rgba(rgb, alpha) { return `rgba(${rgb},${Math.max(0, Math.min(1, alpha))})`; }
+function pathFrom(points) {
+  const samples = [{ x: points[0].x, y: points[0].y, d: 0 }];
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i], mid = (a.x + b.x) / 2;
+    const steps = Math.max(12, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 5));
+    for (let j = 1; j <= steps; j++) {
+      const t = j / steps, u = 1 - t;
+      const x = u ** 3 * a.x + 3 * u * u * t * mid + 3 * u * t * t * mid + t ** 3 * b.x;
+      const y = (u ** 3 + 3 * u * u * t) * a.y + (3 * u * t * t + t ** 3) * b.y;
+      const prev = samples.at(-1);
+      total += Math.hypot(x - prev.x, y - prev.y);
+      samples.push({ x, y, d: total });
+    }
+  }
+  const shape = new Path2D();
+  samples.forEach((p, i) => i ? shape.lineTo(p.x, p.y) : shape.moveTo(p.x, p.y));
+  return { samples, total, shape };
+}
+function pointAt(path, distance) {
+  const list = path.samples;
+  let lo = 0, hi = list.length - 1;
+  while (lo + 1 < hi) { const m = (lo + hi) >> 1; if (list[m].d < distance) lo = m; else hi = m; }
+  const a = list[lo], b = list[hi], f = Math.max(0, Math.min(1, (distance - a.d) / (b.d - a.d || 1)));
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+}
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, Math.min(r, w / 2, h / 2));
+}
+
 export class PacketNetworkDiagram extends HTMLElement {
   static get observedAttributes() {
     return ["data-stop", "attach-mode", "health-text", "health-state", "sender-status", "sender-pps"];
   }
-
   constructor() {
     super();
-    this.attachShadow({ mode: "open" });
-    this._time = 11500;
-    this._last = null;
+    this._time = 8;
     this._raf = 0;
-    this._paused = false;
+    this._last = null;
     this._ready = false;
-    this._packets = [];
-    this._onFrame = this._onFrame.bind(this);
-    this._onVisibility = this._onVisibility.bind(this);
-    this._onMotionPreference = this._onMotionPreference.bind(this);
+    this._manualPause = null;
+    this._dirty = true;
+    this._particles = Array.from({ length: 600 }, (_, i) => ({
+      phase: seed(i), jitter: seed(i + 700), size: .55 + seed(i + 1300) * 1.1,
+    }));
+    this._frame = this._frame.bind(this);
+    this._visibility = this._visibility.bind(this);
+    this._resize = () => { this._dirty = true; this._refresh(); };
+    this._motion = () => { this._manualPause = null; this._refresh(); };
+    this._toggle = () => { this._manualPause = !this.paused; this._refresh(); };
   }
-
+  get selected() { const s = this.getAttribute("data-stop"); return Object.hasOwn(CONDITIONS, s ?? "") ? s : "application"; }
+  get paused() { return this._manualPause ?? this._preference?.matches ?? false; }
   connectedCallback() {
     if (!this._ready) this._mount();
-    this._observer = new ResizeObserver(() => {
-      const compact = this.getBoundingClientRect().width < 1160;
-      if (compact === this._compact) return;
-      this._ready = false;
-      this._packets = [];
-      this._mount();
-      this._updateStop();
-      this._updateReadings();
-      this._updatePauseButton();
-    });
-    this._observer.observe(this);
     this._preference = window.matchMedia("(prefers-reduced-motion: reduce)");
-    this._paused = this._preference.matches;
-    this._preference.addEventListener("change", this._onMotionPreference);
-    document.addEventListener("visibilitychange", this._onVisibility);
-    this._updateStop();
-    this._updateReadings();
-    this._updatePauseButton();
-    this._draw();
-    this._schedule();
+    this._preference.addEventListener("change", this._motion);
+    document.addEventListener("visibilitychange", this._visibility);
+    window.addEventListener("resize", this._resize);
+    this._pause.addEventListener("click", this._toggle);
+    this._observer = new ResizeObserver(this._resize);
+    this._observer.observe(this._board);
+    [...this._nodes, this._service].forEach(n => this._observer.observe(n));
+    this._update();
+    document.fonts?.ready.then(() => { if (this.isConnected) this._resize(); });
   }
-
   disconnectedCallback() {
     cancelAnimationFrame(this._raf);
+    clearTimeout(this._settle);
     this._raf = 0;
     this._last = null;
     this._observer?.disconnect();
-    document.removeEventListener("visibilitychange", this._onVisibility);
-    this._preference?.removeEventListener("change", this._onMotionPreference);
+    this._preference?.removeEventListener("change", this._motion);
+    document.removeEventListener("visibilitychange", this._visibility);
+    window.removeEventListener("resize", this._resize);
+    this._pause?.removeEventListener("click", this._toggle);
   }
-
   attributeChangedCallback(name, previous, next) {
-    if (!this._ready || previous === next) return;
-    if (name === "data-stop") this._updateStop();
-    else this._updateReadings();
+    if (this._ready && previous !== next) this._update();
   }
-
-  get selected() {
-    const value = this.getAttribute("data-stop");
-    return Object.hasOwn(STOP_X, value ?? "") ? value : "application";
-  }
-
   _mount() {
-    const compact = this.getBoundingClientRect().width < 1160;
-    this._compact = compact;
-    const width = compact ? 1000 : 1400;
-    const receiverX = compact ? 176 : 308;
-    const serviceX = compact ? 866 : 1225;
-    const serviceWidth = compact ? 116 : 130;
-    const serviceCenter = serviceX + serviceWidth / 2;
-    this._startX = compact ? 168 : START_X;
-    this._httpEnd = compact ? 950 : HTTP_END_X;
-    this._stages = STAGES.map((stage, index) => ({
-      ...stage,
-      x: compact ? 196 + index * 132 : stage.x,
-      width: compact ? 116 : 146,
-    }));
-    const nodes = this._stages.map(stage => `
-      <g class="stage" data-stage="${stage.id}">
-        <rect class="node-body" x="${stage.x}" y="97" width="${stage.width}" height="216" rx="8"/>
-        <path class="node-header" d="M${stage.x + 2},164 V106 Q${stage.x + 2},99 ${stage.x + 9},99 H${stage.x + stage.width - 9} Q${stage.x + stage.width - 2},99 ${stage.x + stage.width - 2},106 V164 Z"/>
-        <line class="node-separator" x1="${stage.x + 1}" x2="${stage.x + stage.width - 1}" y1="164" y2="164"/>
-        <text class="node-title" text-anchor="middle" x="${stage.x + stage.width / 2}" y="132">${stage.title}</text>
-        <text class="node-sub ${stage.id === "xdp" ? "mode-text" : ""}" text-anchor="middle" x="${stage.x + stage.width / 2}" y="153">${stage.sub}</text>
-      </g>`).join("");
-    this.shadowRoot.innerHTML = `
-      <style>${styles}</style>
-      <figure class="figure">
-        <div class="viewport" role="region" tabindex="0" aria-label="通信の処理経路。狭い画面では横にスクロールできます。">
-          <svg viewBox="0 0 ${width} 356" role="img" aria-labelledby="diagram-title diagram-desc">
-            <title id="diagram-title">通信の処理経路と選択した破棄位置</title>
-            <desc id="diagram-desc"></desc>
-            <defs>
-              <marker id="blue-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M1 1 L8 5 L1 9" fill="none" stroke="#0962bc" stroke-width="1.8"/>
-              </marker>
-            </defs>
-            <rect x="${receiverX}" y="20" width="${width - receiverX - 24}" height="312" rx="12" fill="#f7f9fc" stroke="#d8e0eb"/>
-            <text class="heading" x="24" y="48">送る側（Pi A）</text>
-            <text class="subtle" x="24" y="73">パソコンのイメージ</text>
-            <g transform="translate(${receiverX + 22} 34)" fill="none" stroke="#17335f" stroke-width="1.8" aria-hidden="true">
-              <rect width="24" height="10" rx="2"/><rect y="13" width="24" height="10" rx="2"/>
-              <circle cx="5" cy="5" r="1" fill="#17335f"/><circle cx="5" cy="18" r="1" fill="#17335f"/>
-              <path d="M11 5h8M11 18h8"/>
-            </g>
-            <text class="heading" x="${receiverX + 61}" y="53">受ける側（Pi B）</text>
-            <text class="subtle" x="${compact ? 450 : 616}" y="53">サーバー内の処理を左から右へ</text>
-            <text class="subtle" text-anchor="end" x="${width - 47}" y="80">受信方向を抜粋</text>
-            <g transform="${compact ? "translate(32 96) scale(.75)" : "translate(40 154)"}" aria-hidden="true">
-              <rect x="8" y="0" width="96" height="63" rx="5" fill="#fff" stroke="#17335f" stroke-width="3"/>
-              <rect x="16" y="8" width="80" height="46" rx="1" fill="#eaf1f9"/>
-              <path d="M8 66 H104 L116 78 H-4 Z" fill="#d5e0ec" stroke="#17335f" stroke-width="2.5" stroke-linejoin="round"/>
-              <path d="M43 70 H69" stroke="#17335f" stroke-width="2"/>
-            </g>
-            <text class="subtle sender-status" x="24" y="292">待機中</text>
-            <text class="sender-pps" x="24" y="316" font-size="20" font-weight="700">— pps</text>
-            <text class="red-label" x="${compact ? 20 : 185}" y="171">破棄対象</text>
-            <text class="red-label" x="${compact ? 20 : 185}" y="190">UDP :4000</text>
-            <text class="blue-label" x="${compact ? 20 : 185}" y="235">守りたい通信</text>
-            <text class="blue-label" x="${compact ? 20 : 185}" y="254">HTTP :8080</text>
-            ${nodes}
-            <rect x="${serviceX}" y="97" width="${serviceWidth}" height="216" rx="8" fill="#fff" stroke="#8292a8" stroke-width="1.25"/>
-            <text x="${serviceCenter}" y="132" text-anchor="middle" font-size="17" font-weight="700">Webサービス</text>
-            <text x="${serviceCenter}" y="158" text-anchor="middle" class="subtle">HTTP観測</text>
-            <text class="health-reading" x="${serviceCenter}" y="184" text-anchor="middle" font-size="16" font-weight="700">計測待ち</text>
-            <text x="${serviceCenter}" y="304" text-anchor="middle" class="node-sub">HTTP :8080</text>
-            <path class="track-base" d="M${this._startX} 202H${compact ? 838 : 1171}" stroke-dasharray="3 6"/>
-            <path class="load-path"/>
-            <path class="service-path" d="${compact ? "M126 159 C162 159 143 266 168 266" : "M154 223 C170 223 166 266 192 266"} H${this._httpEnd}"/>
-            <path d="M${serviceX - 43} 266H${serviceX - 12}" class="service-path" marker-end="url(#blue-arrow)"/>
-            <circle cx="${this._httpEnd}" cy="266" r="13" fill="#fff" stroke="#0962bc" stroke-width="2"/>
-            <path d="M${this._httpEnd - 6} 266h11m-4-4 4 4-4 4" fill="none" stroke="#0962bc" stroke-width="1.8"/>
-            <g class="packet-layer" aria-hidden="true"></g>
-            <g class="gate" aria-hidden="true">
-              <rect x="-4" y="183" width="8" height="38" rx="2" fill="#b42343"/>
-              <path d="M-1 188v27" stroke="#fff" stroke-width="1.4"/>
-            </g>
-            <text class="gate-label" text-anchor="middle" y="236">一致 → 破棄</text>
-            <text class="pass-label" text-anchor="middle" y="300">不一致 → 通過</text>
-            <text class="subtle" x="24" y="340">■ UDP　● HTTP</text>
-            <text class="subtle" x="${receiverX + 21}" y="351">2本の線は通信の種類を区別する表示です。通る受信処理は共通です。</text>
-          </svg>
+    // Only static strings are templated. All external readings use textContent.
+    this.innerHTML = `<style>${css}</style>
+      <div class="packet-stream-viewport" role="region" tabindex="0" aria-label="通信図。狭い画面では横にスクロールできます。">
+      <section class="network-board network-board--stream" aria-label="Pi AからPi Bへの通信と停止位置">
+        <article class="network-device network-device--sender">
+          <div class="network-device__heading"><strong>送る側（Pi A）</strong><small>あなたのパソコンのイメージ</small></div>
+          <div class="computer-illustration" aria-hidden="true"><span class="computer-illustration__screen"><i></i></span><span class="computer-illustration__hinge"></span><span class="computer-illustration__base"></span></div>
+          <div class="sender-live"><span class="sender-status"></span><strong class="sender-pps"></strong></div>
+        </article>
+        <div class="network-arrows" aria-hidden="true">
+          <div class="network-arrow network-arrow--load"><span>いらない通信<br><b>UDP :4000</b></span><i></i></div>
+          <div class="network-arrow network-arrow--service"><span>守りたい通信<br><b>HTTP GET :8080</b></span><i></i></div>
         </div>
-        <figcaption class="caption">
-          <div class="caption-text">
-            <strong class="rule-text" aria-live="polite"></strong>
-            <span>説明アニメーション：粒の数・速さは実測値ではありません。HTTPの通過と応答成功は別です。</span>
+        <article class="network-device network-device--receiver">
+          <div class="receiver-topline"><div><strong>受ける側（Pi B）</strong><small>サーバー・クラウドのイメージ</small></div>
+            <div class="current-stop"><span>いま見ている場所</span><strong class="stop-title"></strong><small class="stop-technical"></small></div>
           </div>
-          <button type="button" class="pause-button" aria-pressed="false">
-            <span class="pause-icon" aria-hidden="true">Ⅱ</span>
-            <span class="pause-label">一時停止</span>
-          </button>
-        </figcaption>
-      </figure>`;
-    const layer = this.shadowRoot.querySelector(".packet-layer");
-    for (const kind of ["load", "http"]) {
-      const count = kind === "load" ? 28 : 14;
-      for (let index = 0; index < count; index += 1) {
-        const node = document.createElementNS(SVG_NS, "g");
-        node.classList.add("packet", `${kind}-packet`);
-        node.innerHTML = kind === "load"
-          ? '<rect x="-9" y="-6" width="18" height="12" rx="2"/><path d="M-4-2h8M-4 2h5"/>'
-          : '<circle r="7"/><path d="M-3 0h6M0-3l3 3-3 3"/>';
-        layer.appendChild(node);
-        this._packets.push({ kind, index, count, node });
-      }
-    }
-    this.shadowRoot.querySelector(".pause-button").addEventListener("click", () => {
-      this._paused = !this._paused;
-      this._last = null;
-      this._updatePauseButton();
-      if (this._paused) {
-        cancelAnimationFrame(this._raf);
-        this._raf = 0;
-      } else this._schedule();
-    });
+          <div class="receiver-body">
+            <div class="pipeline">${STAGES.map((s, i) => `<div class="pipeline-step">${i ? '<span class="pipeline-link">→</span>' : ''}<div class="pipeline-node pipeline-node--${s.id}" data-stage="${s.id}"><strong>${s.title}</strong><small>${s.sub}</small><em style="display:none">ここで止める</em></div></div>`).join("")}</div>
+            <div class="service-check"><span>Webサービス</span><strong class="health-reading"></strong><small>レスポンスは速い？</small></div>
+          </div>
+        </article>
+        <canvas class="stream-canvas" aria-hidden="true"></canvas>
+        <span class="stream-blocked" aria-hidden="true">BLOCKED</span>
+        <div class="stream-tools"><span class="stream-note">模式表示 · 粒の数と速さは実測値ではありません</span><button class="stream-pause" type="button" aria-pressed="false">一時停止</button></div>
+        <span class="packet-stream-description" aria-live="polite"></span>
+      </section></div>`;
+    this._board = this.querySelector(".network-board");
+    this._canvas = this.querySelector("canvas");
+    this._ctx = this._canvas.getContext("2d");
+    this._nodes = [...this.querySelectorAll(".pipeline-node")];
+    this._service = this.querySelector(".service-check");
+    this._pause = this.querySelector(".stream-pause");
+    this._blocked = this.querySelector(".stream-blocked");
     this._ready = true;
   }
-
-  _updateStop() {
-    const selected = this.selected;
-    const active = this._stages.find(stage => stage.id === selected);
-    const stop = active.x + active.width - 46;
-    this._stop = stop;
-    const labelX = active.x + active.width / 2;
-    for (const stage of this.shadowRoot.querySelectorAll(".stage")) {
-      stage.classList.toggle("is-selected", stage.dataset.stage === selected);
+  _update() {
+    const selected = this.selected, [label, technical] = CONDITIONS[selected];
+    for (const n of this._nodes) {
+      const active = n.dataset.stage === selected;
+      n.classList.toggle("is-active", active);
+      // The existing global em rule specifies display:grid, so set display
+      // explicitly rather than relying on the user-agent [hidden] rule.
+      n.querySelector("em").style.display = active ? "grid" : "none";
     }
-    this.shadowRoot.querySelector(".load-path").setAttribute("d", `${this._compact ? "M126 155 C152 155 147 202 168 202" : "M154 216 C168 216 174 202 192 202"} H${stop}`);
-    this.shadowRoot.querySelector(".gate").setAttribute("transform", `translate(${stop} 0)`);
-    this.shadowRoot.querySelector(".gate-label").setAttribute("x", String(labelX));
-    this.shadowRoot.querySelector(".pass-label").setAttribute("x", String(labelX));
-    this.shadowRoot.querySelector(".rule-text").textContent = `${LABELS[selected]}：UDP :4000 だけを破棄。HTTP :8080 は通過。`;
-    this.shadowRoot.querySelector("#diagram-desc").textContent =
-      `NIC、XDP、Linuxの受信処理、Netfilter input、アプリの順に処理します。${LABELS[selected]}を選択中。四角いUDP :4000は選択地点で破棄され、下流へ進みません。丸いHTTP :8080は同じ処理の中を通過します。図の動きは実測に連動していません。`;
-    this._draw();
-  }
-
-  _updateReadings() {
     const mode = this.getAttribute("attach-mode");
-    this.shadowRoot.querySelector(".mode-text").textContent =
-      mode === "generic" ? "generic XDP" : mode === "native" ? "native XDP" : "mode 未取得";
-    const text = this.getAttribute("health-text") || "計測待ち";
-    const reading = this.shadowRoot.querySelector(".health-reading");
-    // Text supplied by React is inserted as text, never interpolated into markup.
-    reading.replaceChildren();
-    const lines = text.split(" · ", 2);
-    lines.forEach((line, index) => {
-      const tspan = document.createElementNS(SVG_NS, "tspan");
-      tspan.setAttribute("x", this._compact ? "924" : "1290");
-      tspan.setAttribute("dy", index === 0 ? "0" : "23");
-      tspan.textContent = line;
-      reading.appendChild(tspan);
-    });
-    const state = this.getAttribute("health-state");
-    reading.style.fill = state === "down" ? "#a51e3c" : state === "ok" ? "#14633e" : "#52647a";
-    this.shadowRoot.querySelector(".sender-status").textContent = this.getAttribute("sender-status") || "待機中";
-    this.shadowRoot.querySelector(".sender-pps").textContent = this.getAttribute("sender-pps") || "— pps";
+    this.querySelector(".pipeline-node--xdp small").textContent = mode === "generic" ? "generic XDP" : mode === "native" ? "native XDP" : "実行モード未取得";
+    this.querySelector(".stop-title").textContent = label;
+    this.querySelector(".stop-technical").textContent = technical + (selected === "xdp" && ["native", "generic"].includes(mode) ? ` · ${mode}` : "");
+    this.querySelector(".sender-status").textContent = this.getAttribute("sender-status") || "待機中";
+    this.querySelector(".sender-pps").textContent = this.getAttribute("sender-pps") || "— pps";
+    this.querySelector(".health-reading").textContent = this.getAttribute("health-text") || "計測待ち";
+    const health = this.getAttribute("health-state");
+    this._service.className = "service-check " + (health === "ok" ? "is-ok" : health === "down" ? "is-down" : "is-waiting");
+    this.querySelector(".packet-stream-description").textContent = `${technical}を選択中。赤いUDP :4000は選択地点で破棄されます。青いHTTP :8080は各処理層を通過します。二色は同じ受信経路を通る通信の種類を区別する模式表現です。フィルタの通過とHTTP応答の成功は別です。`;
+    this._dirty = true;
+    clearTimeout(this._settle);
+    // Re-measure after the existing selected-node transform has settled.
+    this._settle = setTimeout(() => { if (this.isConnected) this._resize(); }, 220);
+    this._refresh();
   }
-
-  _draw() {
-    if (!this._ready) return;
-    for (const { kind, index, count, node } of this._packets) {
-      const gap = kind === "load" ? 550 : 1050;
-      const cycle = count * gap;
-      const age = ((this._time - index * gap) % cycle + cycle) % cycle;
-      const end = kind === "load" ? this._stop - 13 : this._httpEnd;
-      const travel = (end - this._startX) / SPEED * 1000;
-      const dwell = kind === "load" ? 170 : 0;
-      const fade = kind === "load" ? 180 : 150;
-      const visible = age <= travel + dwell + fade;
-      node.style.display = visible ? "" : "none";
-      if (!visible) continue;
-      const x = Math.min(end, this._startX + age / 1000 * SPEED);
-      const y = kind === "load" ? RED_Y : BLUE_Y;
-      const opacity = age <= travel + dwell ? 1 : Math.max(0, 1 - (age - travel - dwell) / fade);
-      node.setAttribute("transform", `translate(${x.toFixed(2)} ${y})`);
-      node.setAttribute("opacity", opacity.toFixed(3));
-      // Red packets stop and disappear in place. They do not fall, bounce,
-      // turn into a queue, or continue beyond the selected rule.
+  _measure() {
+    const root = this._board.getBoundingClientRect();
+    if (!root.width || !root.height) return false;
+    const box = el => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left - root.left, y: r.top - root.top, w: r.width, h: r.height, right: r.right - root.left, bottom: r.bottom - root.top };
+    };
+    this._width = root.width; this._height = root.height;
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.round(root.width * ratio), h = Math.round(root.height * ratio);
+    if (this._canvas.width !== w || this._canvas.height !== h) { this._canvas.width = w; this._canvas.height = h; }
+    this._ratio = ratio;
+    const screen = box(this.querySelector(".computer-illustration__screen"));
+    const redArrow = box(this.querySelector(".network-arrow--load i"));
+    const blueArrow = box(this.querySelector(".network-arrow--service i"));
+    const nodes = this._nodes.map(n => ({ ...box(n), id: n.dataset.stage }));
+    const service = box(this._service);
+    const active = nodes.find(n => n.id === this.selected);
+    const redY = Math.min(...nodes.map(n => n.y)) - 28;
+    this._gate = { x: active.x + active.w / 2, y: redY };
+    const startX = screen.right - 2;
+    this._red = pathFrom([
+      { x: startX, y: screen.y + screen.h * .44 },
+      { x: redArrow.x, y: redArrow.y + redArrow.h / 2 },
+      { x: redArrow.right, y: redArrow.y + redArrow.h / 2 },
+      { x: nodes[0].x, y: redY }, { x: this._gate.x, y: redY },
+    ]);
+    // Use the clear top band INSIDE each original node, not a bypass underneath
+    // the pipeline. This preserves every text position and avoids covering it.
+    const bluePoints = [
+      { x: startX, y: screen.y + screen.h * .70 },
+      { x: blueArrow.x, y: blueArrow.y + blueArrow.h / 2 },
+      { x: blueArrow.right, y: blueArrow.y + blueArrow.h / 2 },
+    ];
+    for (const n of nodes) bluePoints.push({ x: n.x + 3, y: n.y + 9 }, { x: n.right - 3, y: n.y + 9 });
+    bluePoints.push({ x: service.x + 3, y: service.y + 9 }, { x: service.right - 11, y: service.y + 9 });
+    this._blue = pathFrom(bluePoints);
+    this._nodeBoxes = [...nodes, service].map(n => {
+      const x = n.x + n.w / 2;
+      const p = this._blue.samples.reduce((best, p) => Math.abs(p.x - x) < Math.abs(best.x - x) ? p : best);
+      return { ...n, distance: p.d };
+    });
+    this._blocked.style.left = `${this._gate.x}px`;
+    this._blocked.style.top = `${redY - 46}px`;
+    this._dirty = false;
+    return true;
+  }
+  _refresh() {
+    if (!this.isConnected) return;
+    this._pause.textContent = this.paused ? "再生" : "一時停止";
+    this._pause.setAttribute("aria-pressed", String(this.paused));
+    if (this.paused || document.hidden) {
+      cancelAnimationFrame(this._raf); this._raf = 0; this._last = null;
+      if (this._dirty) this._measure();
+      this._draw();
+    } else this._schedule();
+  }
+  _schedule() {
+    if (this.isConnected && !this.paused && !document.hidden && !this._raf) this._raf = requestAnimationFrame(this._frame);
+  }
+  _frame(now) {
+    this._raf = 0;
+    if (!this.isConnected || document.hidden || this.paused) return;
+    if (this._last != null) this._time += Math.min(now - this._last, 50) / 1000;
+    this._last = now;
+    if (this._dirty || this._ratio !== Math.min(window.devicePixelRatio || 1, 2)) this._measure();
+    this._draw(); this._schedule();
+  }
+  _visibility() {
+    this._last = null;
+    if (document.hidden) { cancelAnimationFrame(this._raf); this._raf = 0; } else this._refresh();
+  }
+  _stroke(path, rgb) {
+    const c = this._ctx;
+    for (const [width, alpha] of [[21,.035],[12,.08],[5,.19],[1.4,.65]]) {
+      c.strokeStyle = rgba(rgb, alpha); c.lineWidth = width; c.stroke(path.shape);
     }
   }
-
-  _schedule() {
-    if (!this.isConnected || this._paused || document.hidden || this._raf) return;
-    this._raf = requestAnimationFrame(this._onFrame);
+  _stream(path, rgb, count, isRed) {
+    const c = this._ctx, travel = this._time * SPEED;
+    this._stroke(path, rgb);
+    for (let i = 0; i < count; i++) {
+      const p = this._particles[i];
+      const d = (p.phase * path.total + travel * (isRed ? 1.07 : 1)) % path.total;
+      const pos = pointAt(path, d);
+      const wave = Math.sin(d * .036 - this._time * 1.8 + p.jitter * 3);
+      const spread = (p.jitter - .5) * (isRed ? 11 : 5);
+      const y = pos.y + spread + wave * (isRed ? 3.4 : 1.1);
+      const envelope = .52 + .48 * Math.pow(.5 + .5 * Math.cos((d - travel) / PERIOD * TAU), 3);
+      c.fillStyle = rgba(rgb, .35 + envelope * .60);
+      c.beginPath(); c.arc(pos.x, y, p.size, 0, TAU); c.fill();
+      if (i % 5 === 0) {
+        c.fillStyle = rgba(rgb, .07); c.beginPath(); c.arc(pos.x, y, p.size * 3.7, 0, TAU); c.fill();
+        c.fillStyle = "rgba(255,255,255,.88)"; c.beginPath(); c.arc(pos.x, y, p.size * .46, 0, TAU); c.fill();
+      }
+    }
   }
-
-  _onFrame(timestamp) {
-    this._raf = 0;
-    if (!this.isConnected || this._paused || document.hidden) return;
-    if (this._last != null) this._time += Math.min(timestamp - this._last, 64);
-    this._last = timestamp;
-    this._draw();
-    this._schedule();
+  _glowNodes() {
+    const c = this._ctx, travel = this._time * SPEED;
+    for (const n of this._nodeBoxes) {
+      const phase = (n.distance - travel) / PERIOD * TAU;
+      const pulse = Math.pow(.5 + .5 * Math.cos(phase), 9);
+      for (const [expand, alpha] of [[6,.025],[3,.06],[0,.40]]) {
+        roundRect(c, n.x - expand, n.y - expand, n.w + expand * 2, n.h + expand * 2, 11 + expand);
+        c.lineWidth = expand ? 4 : 1.6;
+        c.strokeStyle = rgba(COLORS.http, alpha * pulse); c.stroke();
+      }
+    }
   }
-
-  _onVisibility() {
-    this._last = null;
-    if (document.hidden) {
-      cancelAnimationFrame(this._raf);
-      this._raf = 0;
-    } else this._schedule();
+  _barrier() {
+    const c = this._ctx, g = this._gate;
+    const pulse = .5 + .5 * Math.sin(this._time * 2.3);
+    const halo = c.createRadialGradient(g.x - 1, g.y, 0, g.x, g.y, 37);
+    halo.addColorStop(0, rgba(COLORS.load, .30 + pulse * .08)); halo.addColorStop(1, rgba(COLORS.load, 0));
+    c.fillStyle = halo; c.fillRect(g.x - 40, g.y - 40, 80, 80);
+    // A local barrier on the unwanted-traffic lane. It does not cover HTTP.
+    c.beginPath(); c.moveTo(g.x + 2, g.y - 24); c.bezierCurveTo(g.x - 8, g.y - 10, g.x - 8, g.y + 10, g.x + 2, g.y + 24);
+    c.strokeStyle = rgba(COLORS.load, .16); c.lineWidth = 10; c.stroke();
+    c.strokeStyle = rgba(COLORS.load, .80); c.lineWidth = 2.3; c.stroke();
+    c.strokeStyle = "rgba(255,255,255,.88)"; c.lineWidth = .9; c.stroke();
+    // Burst fragments disperse UPSTREAM and fade; never fall into a fake queue
+    // or continue through the blocked stage. No per-frame allocation/growth.
+    for (let i = 0; i < 72; i++) {
+      const p = this._particles[i + 500];
+      const age = (this._time * .90 + p.phase) % 1;
+      const x = g.x - 5 - (10 + p.jitter * 54) * age;
+      const y = g.y + (seed(i + 3000) * 74 - 54) * age;
+      const a = (1 - age) ** 1.65;
+      c.fillStyle = rgba(COLORS.load, a * .84);
+      c.beginPath(); c.arc(x, y, p.size * (1.7 - age * .60), 0, TAU); c.fill();
+    }
+    c.fillStyle = "rgba(255,255,255,.92)"; c.beginPath(); c.arc(g.x - 4, g.y, 2.1 + pulse, 0, TAU); c.fill();
   }
-
-  _onMotionPreference(event) {
-    this._paused = event.matches;
-    this._last = null;
-    this._updatePauseButton();
-    if (this._paused) {
-      cancelAnimationFrame(this._raf);
-      this._raf = 0;
-    } else this._schedule();
-  }
-
-  _updatePauseButton() {
-    this.shadowRoot.querySelector(".pause-button").setAttribute("aria-pressed", String(this._paused));
-    this.shadowRoot.querySelector(".pause-label").textContent = this._paused ? "再生" : "一時停止";
-    this.shadowRoot.querySelector(".pause-icon").textContent = this._paused ? "▷" : "Ⅱ";
+  _draw() {
+    if (!this._ctx || !this._red || !this._blue) return;
+    const c = this._ctx;
+    c.setTransform(this._ratio, 0, 0, this._ratio, 0, 0);
+    c.clearRect(0, 0, this._width, this._height);
+    c.lineCap = "round"; c.lineJoin = "round";
+    this._glowNodes();
+    this._stream(this._red, COLORS.load, 370, true);
+    this._stream(this._blue, COLORS.http, 600, false);
+    this._barrier();
+    const end = this._blue.samples.at(-1);
+    c.beginPath(); c.moveTo(end.x - 6, end.y - 4); c.lineTo(end.x, end.y); c.lineTo(end.x - 6, end.y + 4);
+    c.strokeStyle = rgba(COLORS.http, .85); c.lineWidth = 1.8; c.stroke();
   }
 }
-
-if (!customElements.get("packet-network-diagram")) {
-  customElements.define("packet-network-diagram", PacketNetworkDiagram);
-}
+if (!customElements.get("packet-network-diagram")) customElements.define("packet-network-diagram", PacketNetworkDiagram);
