@@ -42,12 +42,12 @@ function CpuComparison({ selected, onSelect }: {
         <span className="cpu-comparison__eyebrow">今回の実測</span>
         <h2 id="cpu-result-title">アプリまで届ける条件で、<br />CPU使用率が高かった。</h2>
         <div className="cpu-comparison__differences">
-          <span>XDP → nftables <b>+{(CPU.netfilter - CPU.xdp).toFixed(1)}ポイント</b></span>
-          <span>nftables → Application <b>+{(CPU.application - CPU.netfilter).toFixed(1)}ポイント</b></span>
+          <span>XDPで停止 → nftablesで停止 <b>+{(CPU.netfilter - CPU.xdp).toFixed(1)}ポイント</b></span>
+          <span>nftablesで停止 → Applicationで停止 <b>+{(CPU.application - CPU.netfilter).toFixed(1)}ポイント</b></span>
         </div>
       </div>
       <figure className="cpu-chart">
-        <figcaption>Pi B全体のCPU使用率 <small>3回の中央値</small></figcaption>
+        <figcaption>停止位置ごとの Pi B 全体のCPU使用率 <small>3回の中央値</small></figcaption>
         <div className="cpu-chart__axis" aria-hidden="true">
           <span>0</span><span>4</span><span>8</span><span>12%</span>
         </div>
@@ -65,7 +65,7 @@ function CpuComparison({ selected, onSelect }: {
                 title={`各回のCPU使用率：${CPU_SAMPLES[mode].map(value => `${value.toFixed(1)}%`).join(" / ")}`}
                 onClick={() => onSelect(mode)}
               >
-                <span className="cpu-chart__label">{condition.technical}{mode === "xdp" && <small>（generic）</small>}</span>
+                <span className="cpu-chart__label">{condition.technical}{mode === "xdp" && <small>（generic）</small>}で止める</span>
                 <span className="cpu-chart__track" aria-hidden="true">
                   <span className="cpu-chart__fill" style={{ width: `${CPU[mode] / CPU_AXIS_MAX * 100}%` }} />
                 </span>
@@ -74,7 +74,7 @@ function CpuComparison({ selected, onSelect }: {
             );
           })}
         </div>
-        <p className="cpu-chart__conditions">毎秒約5万パケット · 10秒 × 3回／各処理層の負荷は未計測</p>
+        <p className="cpu-chart__conditions">毎秒約5万パケット · 10秒 × 3回</p>
       </figure>
     </section>
   );
