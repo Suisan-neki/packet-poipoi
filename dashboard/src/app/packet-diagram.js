@@ -6,10 +6,10 @@
  */
 const STAGES = [
   { id: "nic", title: "NIC", sub: "ネットワークの入口" },
-  { id: "xdp", title: "XDP", sub: "実行モード未取得" },
-  { id: "stack", title: "TCP/IPスタック", sub: "通常のカーネル内処理" },
-  { id: "netfilter", title: "Netfilter", sub: "nftablesで設定" },
-  { id: "application", title: "アプリケーション", sub: "Webサービス" },
+  { id: "xdp", title: "XDP", sub: "最前線の検問所" },
+  { id: "stack", title: "TCP/IPスタック", sub: "データの仕分け" },
+  { id: "netfilter", title: "Netfilter", sub: "ファイアウォール" },
+  { id: "application", title: "アプリケーション", sub: "最終目的地" },
 ];
 const CONDITIONS = {
   xdp: ["入口で捨てる", "XDP"],
@@ -183,7 +183,6 @@ export class PacketNetworkDiagram extends HTMLElement {
       n.querySelector("em").style.display = active ? "grid" : "none";
     }
     const mode = this.getAttribute("attach-mode");
-    this.querySelector(".pipeline-node--xdp small").textContent = mode === "generic" ? "generic XDP" : mode === "native" ? "native XDP" : "実行モード未取得";
     this.querySelector(".stop-title").textContent = label;
     this.querySelector(".stop-technical").textContent = technical + (selected === "xdp" && ["native", "generic"].includes(mode) ? ` · ${mode}` : "");
     this.querySelector(".sender-status").textContent = this.getAttribute("sender-status") || "待機中";
