@@ -101,8 +101,8 @@ export default function App() {
     <main className="exhibit-page exhibit-page--compact cpu-exhibit" data-mode={selected}>
       <section className="exhibit-intro exhibit-intro--compact">
         <div className="exhibit-intro__copy">
-          <h1>どこで通信を止める？</h1>
-          <p>不要な通信の処理を、どの層の責務にするか。停止位置によるリソース消費の違いを比較します。</p>
+          <h1>ごみパケット、どこで捨てる？</h1>
+          <p>公開されたサーバーには、日々大量の「不要な通信（ノイズや攻撃）」が飛んできます。<br />そのゴミ掃除、アプリケーションにさせてませんか？</p>
         </div>
       </section>
       <section className="mode-switch" aria-label="通信を止める位置を選ぶ">
