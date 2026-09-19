@@ -6,7 +6,7 @@
  */
 const STAGES = [
   { id: "nic", title: "NIC", sub: "ネットワークの入口" },
-  { id: "xdp", title: "XDP", sub: "最前線の検問所" },
+  { id: "xdp", title: "XDP", sub: "通常処理の手前で判定" },
   { id: "stack", title: "Linux", sub: "OSの標準ネットワーク処理" },
   { id: "netfilter", title: "Netfilter", sub: "OS内蔵のパケットフィルタ" },
   { id: "application", title: "アプリ<br>ケーション", sub: "最終目的地" },
